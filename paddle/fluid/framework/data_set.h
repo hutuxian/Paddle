@@ -111,6 +111,10 @@ class Dataset {
   virtual int64_t GetShuffleDataSize() = 0;
   // merge by ins id
   virtual void MergeByInsId() = 0;
+  // notify boxps passbegin with all feasigns need
+  virtual void PassBegin() = 0;
+  // notify boxps passend
+  virtual void PassEnd() = 0;
 
  protected:
   virtual int ReceiveFromClient(int msg_type, int client_id,
@@ -166,6 +170,8 @@ class DatasetImpl : public Dataset {
   virtual int64_t GetMemoryDataSize();
   virtual int64_t GetShuffleDataSize();
   virtual void MergeByInsId() {}
+  virtual void PassBegin() {}
+  virtual void PassEnd() {}
 
  protected:
   virtual int ReceiveFromClient(int msg_type, int client_id,
@@ -208,6 +214,8 @@ class MultiSlotDataset : public DatasetImpl<Record> {
   virtual void SlotsShuffle(const std::set<std::string>& slots_to_replace);
   virtual void GetRandomData(const std::set<uint16_t>& slots_to_replace,
                              std::vector<Record>* result);
+  virtual void PassBegin();
+  virtual void PassEnd();
   virtual ~MultiSlotDataset() {}
 };
 
