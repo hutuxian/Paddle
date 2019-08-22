@@ -64,8 +64,6 @@ class Dataset {
                                bool keep_unmerged_ins) = 0;
   // set fea eval mode
   virtual void SetFeaEval(bool fea_eval, int record_candidate_size) = 0;
-  // set box ps mode
-  virtual void SetBoxPSFlag() = 0;
   // get file list
   virtual const std::vector<std::string>& GetFileList() = 0;
   // get thread num
@@ -93,8 +91,6 @@ class Dataset {
   virtual void PreLoadIntoMemory() = 0;
   // wait async load done
   virtual void WaitPreLoadDone() = 0;
-  // wait async load and feed data done(used in boxps mode)
-  virtual void WaitFeedPassDone() = 0;
   // release all memory data
   virtual void ReleaseMemory() = 0;
   // local shuffle data
@@ -115,12 +111,6 @@ class Dataset {
   virtual int64_t GetShuffleDataSize() = 0;
   // merge by ins id
   virtual void MergeByInsId() = 0;
-  // notify boxps to feed these pass feasigns from SSD to memory
-  virtual void FeedPass() = 0;
-  // notify boxps passbegin with all feasigns need
-  virtual void BeginPass() = 0;
-  // notify boxps passend
-  virtual void EndPass() = 0;
 
  protected:
   virtual int ReceiveFromClient(int msg_type, int client_id,
@@ -148,10 +138,10 @@ class DatasetImpl : public Dataset {
                                bool keep_unmerged_ins);
 
   virtual void SetFeaEval(bool fea_eval, int record_candidate_size);
-  virtual void SetBoxPSFlag();
   virtual const std::vector<std::string>& GetFileList() { return filelist_; }
   virtual int GetThreadNum() { return thread_num_; }
   virtual int GetTrainerNum() { return trainer_num_; }
+  virtual Channel<T> GetInputChannel() { return input_channel_; }
   virtual int64_t GetFleetSendBatchSize() { return fleet_send_batch_size_; }
   virtual std::pair<std::string, std::string> GetHdfsConfig() {
     return std::make_pair(fs_name_, fs_ugi_);
@@ -166,7 +156,6 @@ class DatasetImpl : public Dataset {
   virtual void LoadIntoMemory();
   virtual void PreLoadIntoMemory();
   virtual void WaitPreLoadDone();
-  virtual void WaitFeedPassDone();
   virtual void ReleaseMemory();
   virtual void LocalShuffle();
   virtual void GlobalShuffle();
@@ -178,9 +167,6 @@ class DatasetImpl : public Dataset {
   virtual int64_t GetMemoryDataSize();
   virtual int64_t GetShuffleDataSize();
   virtual void MergeByInsId() {}
-  virtual void FeedPass() {}
-  virtual void BeginPass() {}
-  virtual void EndPass() {}
 
  protected:
   virtual int ReceiveFromClient(int msg_type, int client_id,
@@ -213,8 +199,6 @@ class DatasetImpl : public Dataset {
   int min_merge_size_;
   std::vector<std::string> merge_slots_list_;
   bool slots_shuffle_fea_eval_ = false;
-  bool boxps_flag_ = false;
-  std::shared_ptr<std::thread> feed_data_thread_;
 };
 
 // use std::vector<MultiSlotType> or Record as data type
@@ -225,9 +209,6 @@ class MultiSlotDataset : public DatasetImpl<Record> {
   virtual void SlotsShuffle(const std::set<std::string>& slots_to_replace);
   virtual void GetRandomData(const std::set<uint16_t>& slots_to_replace,
                              std::vector<Record>* result);
-  virtual void FeedPass();
-  virtual void BeginPass();
-  virtual void EndPass();
   virtual ~MultiSlotDataset() {}
 };
 
