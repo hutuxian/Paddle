@@ -148,6 +148,7 @@ class BoxWrapper {
                    const int batch_size);
 #endif
   void InitializeGPU(const char* conf_file,
+                     const std::vector<int>& slot_vector,
                      const std::vector<std::string>& slot_omit_in_feedpass) {
     if (nullptr != s_instance_) {
       PADDLEBOX_LOG << "Begin InitializeGPU";
@@ -173,6 +174,7 @@ class BoxWrapper {
       for (const auto& slot_name : slot_omit_in_feedpass) {
         slot_name_omited_in_feedpass_.insert(slot_name);
       }
+      slot_vector_ = slot_vector;
     }
   }
   void Finalize() {
@@ -182,7 +184,19 @@ class BoxWrapper {
     }
 #endif
   }
-  void SaveModel() const { printf("will be implemented soon\n"); }
+
+  void SaveBase(const char* batch_model_path, const char* xbox_model_path,
+          boxps::SaveModelStat& stat) {
+    if (nullptr != s_instance_) {
+      s_instance_->boxps_ptr_->SaveBase(batch_model_path, xbox_model_path, stat);
+    }
+  }
+
+  void SaveDelta(const char* xbox_model_path, boxps::SaveModelStat& stat) {
+    if (nullptr != s_instance_) {
+      s_instance_->boxps_ptr_->SaveDelta(xbox_model_path, stat);
+    }
+  }
 
   static std::shared_ptr<BoxWrapper> GetInstance() {
     if (nullptr == s_instance_) {
@@ -277,6 +291,7 @@ class BoxWrapper {
   int pass_flag_ = 1;  // join: 1, update: 0
   bool need_metric_ = false;
   std::map<std::string, MetricMsg> metric_lists_;
+  std::vector<int> slot_vector_;
 };
 
 class BoxHelper {

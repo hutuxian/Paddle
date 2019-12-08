@@ -64,7 +64,7 @@ __global__ void PullCopy(float** dest, const abacus::FeatureValueGpu* src,
 
 __global__ void PushCopy(abacus::FeaturePushValueGpu* dest, float** src,
                          int64_t* len, int hidden, int slot_num, int total_len,
-                         int bs) {
+                         int bs, int* slot_vector) {
   CUDA_KERNEL_LOOP(i, total_len) {
     int low = 0;
     int high = slot_num - 1;
@@ -77,6 +77,7 @@ __global__ void PushCopy(abacus::FeaturePushValueGpu* dest, float** src,
     }
     int x = low;
     int y = i - (x ? len[low - 1] : 0);
+    (dest + i)->slot = slot_vector[x];
     (dest + i)->show = *(src[x] + y * hidden);
     (dest + i)->clk = *(src[x] + y * hidden + 1);
     (dest + i)->embed_g = *(src[x] + y * hidden + 2) * -1. * bs;
@@ -141,16 +142,22 @@ void BoxWrapper::CopyForPush(const paddle::platform::Place& place,
       memory::AllocShared(place, grad_values.size() * sizeof(float*));
   auto buf_length =
       memory::AllocShared(place, slot_lengths.size() * sizeof(int64_t));
+  auto buf_slot_vector = memory::AllocShared(place, slot_lengths_lod.size() * sizeof(int));
+
   float** gpu_values = reinterpret_cast<float**>(buf_grad_value->ptr());
   int64_t* gpu_len = reinterpret_cast<int64_t*>(buf_length->ptr());
+  int* d_slot_vector = reinterpret_cast<int*>(buf_slot_vector->ptr());
 
   cudaMemcpy(gpu_values, grad_values.data(),
              grad_values.size() * sizeof(float*), cudaMemcpyHostToDevice);
   cudaMemcpy(gpu_len, slot_lengths_lod.data(),
              slot_lengths.size() * sizeof(int64_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_slot_vector, slot_vector_.data(), slot_lengths_lod.size() * sizeof(int),
+             cudaMemcpyHostToDevice);
+
   PushCopy<<<(total_length + 512 - 1) / 512, 512, 0, stream>>>(
       total_grad_values_gpu, gpu_values, gpu_len, hidden_size,
-      slot_lengths.size(), total_length, batch_size);
+      slot_lengths.size(), total_length, batch_size, d_slot_vector);
   cudaStreamSynchronize(stream);
 }
 }  // end namespace framework

@@ -25,16 +25,19 @@ class BoxWrapper(object):
     def __init__(self):
         self.box_wrapper = core.BoxWrapper()
 
-    def save_model(self):
-        self.box_wrapper.save_model()
+    def save_base(self, batch_model_path, xbox_model_path, stat):
+        self.box_wrapper.save_base(batch_model_path, xbox_model_path, stat)
 
-    def initialize_gpu(self, conf_file, omit_var_list=None):
+    def save_delta(self, xbox_model_path, stat):
+        self.box_wrapper.save_delta(xbox_model_path, stat)
+
+    def initialize_gpu(self, conf_file, slots, omit_var_list=None):
         if not isinstance(conf_file, str):
             raise TypeError(
                 "conf_file in parameter of initialize_gpu should be str")
         if omit_var_list is None:
             omit_var_list = []
-        self.box_wrapper.initialize_gpu(conf_file, omit_var_list)
+        self.box_wrapper.initialize_gpu(conf_file, slots, omit_var_list)
 
     def init_metric(self,
                     name,
