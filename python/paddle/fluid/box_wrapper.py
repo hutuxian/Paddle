@@ -25,6 +25,12 @@ class BoxWrapper(object):
     def __init__(self):
         self.box_wrapper = core.BoxWrapper()
 
+    def feed_pass(self, date, feasign_list):
+        """
+        seconds to 1970.01.01
+        """
+        self.box_wrapper.feed_pass(date, feasign_list)
+
     def save_base(self, batch_model_path, xbox_model_path, stat):
         self.box_wrapper.save_base(batch_model_path, xbox_model_path, stat)
 
