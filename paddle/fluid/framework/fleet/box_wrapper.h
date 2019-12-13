@@ -26,6 +26,7 @@ limitations under the License. */
 #include <unordered_set>
 #include <vector>
 #include "paddle/fluid/framework/data_set.h"
+#include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/platform/timer.h"
 #ifdef PADDLE_WITH_BOX_PS
 #include <boxps_public.h>
@@ -134,11 +135,10 @@ class BoxWrapper {
                       const std::vector<int64_t>& slot_lengths,
                       const int hidden_size, const int batch_size);
 #ifdef PADDLE_WITH_BOX_PS
-  void CopyForPull(const paddle::platform::Place& place,
-                   const std::vector<const uint64_t*>& keys,
+  void CopyForPull(const paddle::platform::Place& place, uint64_t** gpu_keys,
                    const std::vector<float*>& values,
                    const abacus::FeatureValueGpu* total_values_gpu,
-                   const std::vector<int64_t>& slot_lengths,
+                   const int64_t* gpu_len, const int slot_num,
                    const int hidden_size, const int64_t total_length);
   void CopyForPush(const paddle::platform::Place& place,
                    const std::vector<const float*>& grad_values,
@@ -146,9 +146,11 @@ class BoxWrapper {
                    const std::vector<int64_t>& slot_lengths,
                    const int hidden_size, const int64_t total_length,
                    const int batch_size);
+  void CopyKeys(const paddle::platform::Place& place, uint64_t** origin_keys,
+                uint64_t* total_keys, const int64_t* gpu_len, int slot_num,
+                int total_len);
 #endif
-  void InitializeGPU(const char* conf_file,
-                     const std::vector<int>& slot_vector,
+  void InitializeGPU(const char* conf_file, const std::vector<int>& slot_vector,
                      const std::vector<std::string>& slot_omit_in_feedpass) {
     if (nullptr != s_instance_) {
       PADDLEBOX_LOG << "Begin InitializeGPU";
@@ -175,6 +177,7 @@ class BoxWrapper {
         slot_name_omited_in_feedpass_.insert(slot_name);
       }
       slot_vector_ = slot_vector;
+      keys_tensor.resize(platform::GetCUDADeviceCount());
     }
   }
   void Finalize() {
@@ -186,9 +189,10 @@ class BoxWrapper {
   }
 
   void SaveBase(const char* batch_model_path, const char* xbox_model_path,
-          boxps::SaveModelStat& stat) {
+                boxps::SaveModelStat& stat) {
     if (nullptr != s_instance_) {
-      s_instance_->boxps_ptr_->SaveBase(batch_model_path, xbox_model_path, stat);
+      s_instance_->boxps_ptr_->SaveBase(batch_model_path, xbox_model_path,
+                                        stat);
     }
   }
 
@@ -292,6 +296,7 @@ class BoxWrapper {
   bool need_metric_ = false;
   std::map<std::string, MetricMsg> metric_lists_;
   std::vector<int> slot_vector_;
+  std::vector<LoDTensor> keys_tensor;  // Cache for pull_sparse
 };
 
 class BoxHelper {

@@ -27,8 +27,8 @@ namespace framework {
        i += blockDim.x * gridDim.x)
 
 __global__ void PullCopy(float** dest, const abacus::FeatureValueGpu* src,
-                         int64_t* len, int hidden, int slot_num, int total_len,
-                         uint64_t** keys) {
+                         const int64_t* len, int hidden, int slot_num,
+                         int total_len, uint64_t** keys) {
   CUDA_KERNEL_LOOP(i, total_len) {
     int low = 0;
     int high = slot_num - 1;
@@ -62,6 +62,25 @@ __global__ void PullCopy(float** dest, const abacus::FeatureValueGpu* src,
   }
 }
 
+__global__ void CopyKeysKernel(uint64_t** src_keys, uint64_t* dest_total_keys,
+                               const int64_t* len, int slot_num,
+                               int total_len) {
+  CUDA_KERNEL_LOOP(i, total_len) {
+    int low = 0;
+    int high = slot_num - 1;
+    while (low < high) {
+      int mid = (low + high) / 2;
+      if (i < len[mid])
+        high = mid;
+      else
+        low = mid + 1;
+    }
+    int x = low;
+    int y = i - (x ? len[x - 1] : 0);
+    dest_total_keys[i] = src_keys[x][y];
+  }
+}
+
 __global__ void PushCopy(abacus::FeaturePushValueGpu* dest, float** src,
                          int64_t* len, int hidden, int slot_num, int total_len,
                          int bs, int* slot_vector) {
@@ -88,39 +107,36 @@ __global__ void PushCopy(abacus::FeaturePushValueGpu* dest, float** src,
 }
 
 void BoxWrapper::CopyForPull(const paddle::platform::Place& place,
-                             const std::vector<const uint64_t*>& keys,
+                             uint64_t** gpu_keys,
                              const std::vector<float*>& values,
                              const abacus::FeatureValueGpu* total_values_gpu,
-                             const std::vector<int64_t>& slot_lengths,
+                             const int64_t* gpu_len, const int slot_num,
                              const int hidden_size,
                              const int64_t total_length) {
   auto stream = dynamic_cast<platform::CUDADeviceContext*>(
                     platform::DeviceContextPool::Instance().Get(
                         boost::get<platform::CUDAPlace>(place)))
                     ->stream();
-  auto slot_lengths_lod = slot_lengths;
-  for (int i = 1; i < slot_lengths_lod.size(); i++) {
-    slot_lengths_lod[i] += slot_lengths_lod[i - 1];
-  }
-  auto buf_key = memory::AllocShared(place, keys.size() * sizeof(uint64_t*));
   auto buf_value = memory::AllocShared(place, values.size() * sizeof(float*));
-  auto buf_length =
-      memory::AllocShared(place, slot_lengths.size() * sizeof(int64_t));
-
-  uint64_t** gpu_keys = reinterpret_cast<uint64_t**>(buf_key->ptr());
   float** gpu_values = reinterpret_cast<float**>(buf_value->ptr());
-  int64_t* gpu_len = reinterpret_cast<int64_t*>(buf_length->ptr());
-
-  cudaMemcpy(gpu_keys, keys.data(), keys.size() * sizeof(uint64_t*),
-             cudaMemcpyHostToDevice);
   cudaMemcpy(gpu_values, values.data(), values.size() * sizeof(float*),
              cudaMemcpyHostToDevice);
-  cudaMemcpy(gpu_len, slot_lengths_lod.data(),
-             slot_lengths.size() * sizeof(int64_t), cudaMemcpyHostToDevice);
 
   PullCopy<<<(total_length + 512 - 1) / 512, 512, 0, stream>>>(
-      gpu_values, total_values_gpu, gpu_len, hidden_size, slot_lengths.size(),
+      gpu_values, total_values_gpu, gpu_len, hidden_size, slot_num,
       total_length, gpu_keys);
+  cudaStreamSynchronize(stream);
+}
+
+void BoxWrapper::CopyKeys(const paddle::platform::Place& place,
+                          uint64_t** origin_keys, uint64_t* total_keys,
+                          const int64_t* gpu_len, int slot_num, int total_len) {
+  auto stream = dynamic_cast<platform::CUDADeviceContext*>(
+                    platform::DeviceContextPool::Instance().Get(
+                        boost::get<platform::CUDAPlace>(place)))
+                    ->stream();
+  CopyKeysKernel<<<(total_len + 512 - 1) / 512, 512, 0, stream>>>(
+      origin_keys, total_keys, gpu_len, slot_num, total_len);
   cudaStreamSynchronize(stream);
 }
 
@@ -142,7 +158,8 @@ void BoxWrapper::CopyForPush(const paddle::platform::Place& place,
       memory::AllocShared(place, grad_values.size() * sizeof(float*));
   auto buf_length =
       memory::AllocShared(place, slot_lengths.size() * sizeof(int64_t));
-  auto buf_slot_vector = memory::AllocShared(place, slot_lengths_lod.size() * sizeof(int));
+  auto buf_slot_vector =
+      memory::AllocShared(place, slot_lengths_lod.size() * sizeof(int));
 
   float** gpu_values = reinterpret_cast<float**>(buf_grad_value->ptr());
   int64_t* gpu_len = reinterpret_cast<int64_t*>(buf_length->ptr());
@@ -152,8 +169,8 @@ void BoxWrapper::CopyForPush(const paddle::platform::Place& place,
              grad_values.size() * sizeof(float*), cudaMemcpyHostToDevice);
   cudaMemcpy(gpu_len, slot_lengths_lod.data(),
              slot_lengths.size() * sizeof(int64_t), cudaMemcpyHostToDevice);
-  cudaMemcpy(d_slot_vector, slot_vector_.data(), slot_lengths_lod.size() * sizeof(int),
-             cudaMemcpyHostToDevice);
+  cudaMemcpy(d_slot_vector, slot_vector_.data(),
+             slot_lengths_lod.size() * sizeof(int), cudaMemcpyHostToDevice);
 
   PushCopy<<<(total_length + 512 - 1) / 512, 512, 0, stream>>>(
       total_grad_values_gpu, gpu_values, gpu_len, hidden_size,

@@ -314,6 +314,9 @@ void SectionWorker::TrainFilesWithProfiler() {
     op_total_time[i] = 0.0;
   }
   platform::Timer timeline;
+  if (device_reader_ != nullptr) {
+    device_reader_->Start();
+  }
 
   bool started = false;
   while (in_scope_queue_->Receive(&scope)) {
