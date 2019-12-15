@@ -18,6 +18,7 @@ limitations under the License. */
 #include <algorithm>
 #include <atomic>
 #include <ctime>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>  // NOLINT
@@ -122,6 +123,8 @@ class BoxWrapper {
   BoxWrapper() {}
 
   void FeedPass(int date, const std::vector<uint64_t>& feasgin_to_box) const;
+  void BeginFeedPass(int data_day_id, boxps::PSAgentBase** agent);
+  void EndFeedPass(boxps::PSAgentBase* agent);
   void BeginPass() const;
   void EndPass() const;
   void PullSparse(const paddle::platform::Place& place,
@@ -172,6 +175,8 @@ class BoxWrapper {
       // the second parameter is useless
       s_instance_->boxps_ptr_->InitializeGPU(conf_file, -1, stream_list);
       PADDLEBOX_LOG << "return from InitializeGPU in boxps";
+      p_agent_ = boxps::PSAgentBase::GetIns(feedpass_thread_num_);
+      p_agent_->Init();
 #endif
       for (const auto& slot_name : slot_omit_in_feedpass) {
         slot_name_omited_in_feedpass_.insert(slot_name);
@@ -180,6 +185,12 @@ class BoxWrapper {
       keys_tensor.resize(platform::GetCUDADeviceCount());
     }
   }
+
+#ifdef PADDLE_WITH_BOX_PS
+  boxps::PSAgentBase* GetAgent() { return p_agent_; }
+#endif
+  int GetFeedpassThreadNum() const { return feedpass_thread_num_; }
+
   void Finalize() {
 #ifdef PADDLE_WITH_BOX_PS
     if (nullptr != s_instance_) {
@@ -286,7 +297,9 @@ class BoxWrapper {
 #ifdef PADDLE_WITH_BOX_PS
   static cudaStream_t stream_list_[8];
   static std::shared_ptr<boxps::BoxPSBase> boxps_ptr_;
+  boxps::PSAgentBase* p_agent_ = nullptr;
 #endif
+  const int feedpass_thread_num_ = 30;
   static std::shared_ptr<BoxWrapper> s_instance_;
   std::set<std::string> slot_name_omited_in_feedpass_;
 
@@ -313,7 +326,6 @@ class BoxHelper {
     auto box_ptr = BoxWrapper::GetInstance();
     box_ptr->BeginPass();
   }
-
   void EndPass() {
     auto box_ptr = BoxWrapper::GetInstance();
     box_ptr->EndPass();
@@ -342,25 +354,43 @@ class BoxHelper {
   }
   void WaitFeedPassDone() { feed_data_thread_->join(); }
 
- private:
-  Dataset* dataset_;
-  std::shared_ptr<std::thread> feed_data_thread_;
-  int year_;
-  int month_;
-  int day_;
   // notify boxps to feed this pass feasigns from SSD to memory
+
+  static void FeedPassThread(const std::deque<Record>& t, int begin_index,
+                             int end_index, boxps::PSAgentBase* p_agent,
+                             const std::unordered_set<int>& index_map,
+                             int thread_id) {
+    p_agent->AddKey(0ul, thread_id);
+    for (auto iter = t.begin() + begin_index; iter != t.begin() + end_index;
+         iter++) {
+      const auto& ins = *iter;
+      const auto& feasign_v = ins.uint64_feasigns_;
+      for (const auto feasign : feasign_v) {
+        if (index_map.find(feasign.slot()) != index_map.end()) {
+          continue;
+        }
+        p_agent->AddKey(feasign.sign().uint64_feasign_, thread_id);
+      }
+    }
+  }
   void FeedPass() {
+    PADDLEBOX_LOG << "Begin FeedPass";
+    struct std::tm b;
+    b.tm_year = year_ - 1900;
+    b.tm_mon = month_ - 1;
+    b.tm_mday = day_;
+    b.tm_min = b.tm_hour = b.tm_sec = 0;
+    std::time_t x = std::mktime(&b);
+
     auto box_ptr = BoxWrapper::GetInstance();
     auto input_channel_ =
         dynamic_cast<MultiSlotDataset*>(dataset_)->GetInputChannel();
-    std::vector<Record> pass_data;
-    std::vector<uint64_t> feasign_to_box;
-    input_channel_->ReadAll(pass_data);
+    const std::deque<Record>& pass_data = input_channel_->GetData();
 
     // get feasigns that FeedPass doesn't need
     const std::set<std::string>& slot_name_omited_in_feedpass_ =
         box_ptr->GetOmitedSlot();
-    std::set<int> slot_id_omited_in_feedpass_;
+    std::unordered_set<int> slot_id_omited_in_feedpass_;
     const auto& all_readers = dataset_->GetReaders();
     PADDLE_ENFORCE_GT(all_readers.size(), 0,
                       platform::errors::PreconditionNotMet(
@@ -372,30 +402,39 @@ class BoxHelper {
         slot_id_omited_in_feedpass_.insert(i);
       }
     }
-    for (const auto& ins : pass_data) {
-      const auto& feasign_v = ins.uint64_feasigns_;
-      for (const auto feasign : feasign_v) {
-        if (slot_id_omited_in_feedpass_.find(feasign.slot()) !=
-            slot_id_omited_in_feedpass_.end()) {
-          continue;
-        }
-        feasign_to_box.push_back(feasign.sign().uint64_feasign_);
-      }
-    }
-    input_channel_->Open();
-    input_channel_->Write(pass_data);
-    input_channel_->Close();
-    PADDLEBOX_LOG << "call boxps feedpass";
+    const size_t tnum = box_ptr->GetFeedpassThreadNum();
+    boxps::PSAgentBase* p_agent = box_ptr->GetAgent();
+    PADDLEBOX_LOG << "calling boxps BeginFeedPass";
+    box_ptr->BeginFeedPass(x / 86400, &p_agent);
+    p_agent->Init();
+    PADDLEBOX_LOG << "called boxps BeginFeedPass";
 
-    struct std::tm b;
-    b.tm_year = year_ - 1900;
-    b.tm_mon = month_ - 1;
-    b.tm_mday = day_;
-    b.tm_min = b.tm_hour = b.tm_sec = 0;
-    std::time_t x = std::mktime(&b);
-    box_ptr->FeedPass(x / 86400, feasign_to_box);
+    std::vector<std::thread> threads;
+    size_t len = pass_data.size();
+    size_t len_per_thread = len / tnum;
+    auto remain = len % tnum;
+    size_t begin = 0;
+    for (size_t i = 0; i < tnum; i++) {
+      threads.push_back(
+          std::thread(FeedPassThread, std::ref(pass_data), begin,
+                      begin + len_per_thread + (i < remain ? 1 : 0), p_agent,
+                      std::ref(slot_id_omited_in_feedpass_), i));
+      begin += len_per_thread + (i < remain ? 1 : 0);
+    }
+    for (size_t i = 0; i < tnum; ++i) {
+      threads[i].join();
+    }
+    PADDLEBOX_LOG << "calling boxps EndFeedPass";
+    box_ptr->EndFeedPass(p_agent);
     PADDLEBOX_LOG << "return from boxps feedpass";
   }
+
+ private:
+  Dataset* dataset_;
+  std::shared_ptr<std::thread> feed_data_thread_;
+  int year_;
+  int month_;
+  int day_;
 };
 
 }  // end namespace framework

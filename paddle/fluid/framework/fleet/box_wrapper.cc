@@ -99,6 +99,20 @@ void BoxWrapper::FeedPass(int date,
 #endif
 }
 
+void BoxWrapper::BeginFeedPass(int date, boxps::PSAgentBase** agent) {
+#ifdef PADDLE_WITH_BOX_PS
+  int ret = boxps_ptr_->BeginFeedPass(date, *agent);
+  PADDLE_ENFORCE_EQ(ret, 0, "BeginFeedPass failed in BoxPS.");
+#endif
+}
+
+void BoxWrapper::EndFeedPass(boxps::PSAgentBase* agent) {
+#ifdef PADDLE_WITH_BOX_PS
+  int ret = boxps_ptr_->EndFeedPass(agent);
+  PADDLE_ENFORCE_EQ(ret, 0, "EndFeedPass failed in BoxPS.");
+#endif
+}
+
 void BoxWrapper::BeginPass() const {
 #ifdef PADDLE_WITH_BOX_PS
   int ret = boxps_ptr_->BeginPass();

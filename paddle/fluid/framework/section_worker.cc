@@ -374,9 +374,11 @@ void SectionWorker::TrainFilesWithProfiler() {
     SEC_LOG << "begin running ops";
     cal_timer.Resume();
     int op_id = 0;
+    dev_ctx_->Wait();
     for (auto& op : ops_) {
       timeline.Start();
       op->Run(*exe_scope, place_);
+      dev_ctx_->Wait();
       timeline.Pause();
       op_total_time[op_id++] += timeline.ElapsedUS();
     }
