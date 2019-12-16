@@ -431,8 +431,9 @@ void DatasetImpl<T>::DynamicAdjustChannelNum(int channel_num) {
     total_data_channel->Write(std::move(local_vec));
   }
   total_data_channel->Close();
-  total_data_channel->SetBlockSize(total_data_channel->Size() / channel_num +
-                                   1);
+  if (static_cast<int>(total_data_channel->Size()) >= channel_num) {
+    total_data_channel->SetBlockSize(total_data_channel->Size() / channel_num);
+  }
   // will discard the remaining instances,
   // TODO(hutuxian): should add a config here to choose how to deal with
   // remaining instances
