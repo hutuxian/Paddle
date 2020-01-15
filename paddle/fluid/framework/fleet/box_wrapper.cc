@@ -140,10 +140,10 @@ void BoxWrapper::PullSparse(const paddle::platform::Place& place,
 
   int64_t total_length =
       std::accumulate(slot_lengths.begin(), slot_lengths.end(), 0UL);
-  auto buf = memory::AllocShared(
-      place, total_length * sizeof(abacus::FeatureValueGpu));
-  abacus::FeatureValueGpu* total_values_gpu =
-      reinterpret_cast<abacus::FeatureValueGpu*>(buf->ptr());
+  auto buf =
+      memory::AllocShared(place, total_length * sizeof(boxps::FeatureValueGpu));
+  boxps::FeatureValueGpu* total_values_gpu =
+      reinterpret_cast<boxps::FeatureValueGpu*>(buf->ptr());
 
   if (platform::is_cpu_place(place)) {
     LoDTensor total_keys_tensor;
@@ -288,9 +288,9 @@ void BoxWrapper::PushSparseGrad(const paddle::platform::Place& place,
     }
 
     auto buf = memory::AllocShared(
-        place, total_length * sizeof(abacus::FeaturePushValueGpu));
-    abacus::FeaturePushValueGpu* total_grad_values_gpu =
-        reinterpret_cast<abacus::FeaturePushValueGpu*>(buf->ptr());
+        place, total_length * sizeof(boxps::FeaturePushValueGpu));
+    boxps::FeaturePushValueGpu* total_grad_values_gpu =
+        reinterpret_cast<boxps::FeaturePushValueGpu*>(buf->ptr());
 
     offset = 0;
     if (platform::is_cpu_place(place)) {

@@ -140,12 +140,12 @@ class BoxWrapper {
 #ifdef PADDLE_WITH_BOX_PS
   void CopyForPull(const paddle::platform::Place& place, uint64_t** gpu_keys,
                    const std::vector<float*>& values,
-                   const abacus::FeatureValueGpu* total_values_gpu,
+                   const boxps::FeatureValueGpu* total_values_gpu,
                    const int64_t* gpu_len, const int slot_num,
                    const int hidden_size, const int64_t total_length);
   void CopyForPush(const paddle::platform::Place& place,
                    const std::vector<const float*>& grad_values,
-                   abacus::FeaturePushValueGpu* total_grad_values_gpu,
+                   boxps::FeaturePushValueGpu* total_grad_values_gpu,
                    const std::vector<int64_t>& slot_lengths,
                    const int hidden_size, const int64_t total_length,
                    const int batch_size);

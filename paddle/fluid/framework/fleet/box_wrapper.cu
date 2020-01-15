@@ -26,7 +26,7 @@ namespace framework {
   for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < (n); \
        i += blockDim.x * gridDim.x)
 
-__global__ void PullCopy(float** dest, const abacus::FeatureValueGpu* src,
+__global__ void PullCopy(float** dest, const boxps::FeatureValueGpu* src,
                          const int64_t* len, int hidden, int slot_num,
                          int total_len, uint64_t** keys) {
   CUDA_KERNEL_LOOP(i, total_len) {
@@ -81,7 +81,7 @@ __global__ void CopyKeysKernel(uint64_t** src_keys, uint64_t* dest_total_keys,
   }
 }
 
-__global__ void PushCopy(abacus::FeaturePushValueGpu* dest, float** src,
+__global__ void PushCopy(boxps::FeaturePushValueGpu* dest, float** src,
                          int64_t* len, int hidden, int slot_num, int total_len,
                          int bs, int* slot_vector) {
   CUDA_KERNEL_LOOP(i, total_len) {
@@ -109,7 +109,7 @@ __global__ void PushCopy(abacus::FeaturePushValueGpu* dest, float** src,
 void BoxWrapper::CopyForPull(const paddle::platform::Place& place,
                              uint64_t** gpu_keys,
                              const std::vector<float*>& values,
-                             const abacus::FeatureValueGpu* total_values_gpu,
+                             const boxps::FeatureValueGpu* total_values_gpu,
                              const int64_t* gpu_len, const int slot_num,
                              const int hidden_size,
                              const int64_t total_length) {
@@ -142,7 +142,7 @@ void BoxWrapper::CopyKeys(const paddle::platform::Place& place,
 
 void BoxWrapper::CopyForPush(const paddle::platform::Place& place,
                              const std::vector<const float*>& grad_values,
-                             abacus::FeaturePushValueGpu* total_grad_values_gpu,
+                             boxps::FeaturePushValueGpu* total_grad_values_gpu,
                              const std::vector<int64_t>& slot_lengths,
                              const int hidden_size, const int64_t total_length,
                              const int batch_size) {
