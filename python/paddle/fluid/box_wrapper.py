@@ -46,13 +46,20 @@ class BoxWrapper(object):
         self.box_wrapper.initialize_gpu(conf_file, slots, omit_var_list)
 
     def init_metric(self,
+                    method,
                     name,
                     label_var,
                     pred_var,
-                    is_join,
+                    cmatch_rank_var="",
+                    is_join=True,
+                    cmatch_rank_group="",
                     bucket_size=1000000):
-        self.box_wrapper.init_metric(name, label_var, pred_var, is_join,
-                                     bucket_size)
+        self.box_wrapper.init_metric(method, name, label_var, pred_var,
+                                     cmatch_rank_var, is_join,
+                                     cmatch_rank_group, bucket_size)
+
+    def get_metric_name_list(self):
+        return self.box_wrapper.get_metric_name_list()
 
     def get_metric_msg(self, name):
         return self.box_wrapper.get_metric_msg(name)

@@ -25,10 +25,13 @@ limitations under the License. */
 #include <set>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 #include "paddle/fluid/framework/data_set.h"
 #include "paddle/fluid/framework/lod_tensor.h"
+#include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/platform/timer.h"
+#include "paddle/fluid/string/string_helper.h"
 #ifdef PADDLE_WITH_BOX_PS
 #include <boxps_public.h>
 #endif
@@ -235,7 +238,7 @@ class BoxWrapper {
     return slot_name_omited_in_feedpass_;
   }
 
-  struct MetricMsg {
+  class MetricMsg {
    public:
     MetricMsg() {}
     MetricMsg(const std::string& label_varname, const std::string& pred_varname,
@@ -246,29 +249,211 @@ class BoxWrapper {
       calculator = new BasicAucCalculator();
       calculator->init(bucket_size);
     }
+    virtual ~MetricMsg() {}
     const std::string& LabelVarname() const { return label_varname_; }
     const std::string& PredVarname() const { return pred_varname_; }
     int IsJoin() const { return is_join_; }
     BasicAucCalculator* GetCalculator() { return calculator; }
+    virtual void add_data(const Scope* exe_scope) {
+      std::vector<int64_t> label_data =
+          get_data<int64_t>(exe_scope, LabelVarname());
+      std::vector<float> pred_data = get_data<float>(exe_scope, PredVarname());
+      auto cal = GetCalculator();
+      auto batch_size = label_data.size();
+      for (size_t i = 0; i < batch_size; ++i) {
+        cal->add_data(pred_data[i], label_data[i]);
+      }
+    }
+    template <class T = float>
+    static std::vector<T> get_data(const Scope* exe_scope,
+                                   const std::string& varname) {
+      auto* var = exe_scope->FindVar(varname.c_str());
+      PADDLE_ENFORCE_NOT_NULL(
+          var, platform::errors::NotFound("%s is not found.", varname.c_str()));
+      auto& gpu_tensor = var->Get<LoDTensor>();
+      auto* gpu_data = gpu_tensor.data<T>();
+      auto len = gpu_tensor.numel();
+      std::vector<T> data(len);
+      cudaMemcpy(data.data(), gpu_data, sizeof(T) * len,
+                 cudaMemcpyDeviceToHost);
+      return data;
+    }
+    static std::pair<int, int> parse_cmatch_rank(uint64_t x) {
+      // first 32 bit store cmatch and second 32 bit store rank
+      return std::make_pair(static_cast<int>((x >> 32) & -1),
+                            static_cast<int>(x & -1));
+    }
 
-   private:
+   protected:
     std::string label_varname_;
     std::string pred_varname_;
     int is_join_;
     BasicAucCalculator* calculator;
   };
 
-  int PassFlag() const { return pass_flag_; }
-  void FlipPassFlag() { pass_flag_ = 1 - pass_flag_; }
-  bool NeedMetric() const { return need_metric_; }
-  std::map<std::string, MetricMsg>& GetMetricList() { return metric_lists_; }
+  class MultiTaskMetricMsg : public MetricMsg {
+   public:
+    MultiTaskMetricMsg(const std::string& label_varname,
+                       const std::string& pred_varname_list, int is_join,
+                       const std::string& cmatch_rank_group,
+                       const std::string& cmatch_rank_varname,
+                       int bucket_size = 1000000) {
+      label_varname_ = label_varname;
+      cmatch_rank_varname_ = cmatch_rank_varname;
+      is_join_ = is_join;
+      calculator = new BasicAucCalculator();
+      calculator->init(bucket_size);
+      for (auto& cmatch_rank : string::split_string(cmatch_rank_group)) {
+        std::vector<std::string> cur_cmatch_rank =
+            string::split_string(cmatch_rank, "_");
+        PADDLE_ENFORCE_EQ(cur_cmatch_rank.size(), 2,
+                          platform::errors::PreconditionNotMet(
+                              "illegal cmatch_rank auc spec: %s", cmatch_rank));
+        cmatch_rank_v.emplace_back(atoi(cur_cmatch_rank[0].c_str()),
+                                   atoi(cur_cmatch_rank[1].c_str()));
+      }
+      for (const auto& pred_varname : string::split_string(pred_varname_list)) {
+        pred_v.emplace_back(pred_varname);
+      }
+      PADDLE_ENFORCE_EQ(cmatch_rank_v.size(), pred_v.size(),
+                        platform::errors::PreconditionNotMet(
+                            "cmatch_rank's size [%lu] should be equal to pred "
+                            "list's size [%lu], but ther are not equal",
+                            cmatch_rank_v.size(), pred_v.size()));
+    }
+    virtual ~MultiTaskMetricMsg() {}
+    void add_data(const Scope* exe_scope) override {
+      std::vector<int64_t> cmatch_rank_data =
+          get_data<int64_t>(exe_scope, cmatch_rank_varname_);
+      std::vector<int64_t> label_data =
+          get_data<int64_t>(exe_scope, LabelVarname());
+      size_t batch_size = cmatch_rank_data.size();
+      PADDLE_ENFORCE_EQ(
+          batch_size, label_data.size(),
+          platform::errors::PreconditionNotMet(
+              "illegal batch size: batch_size[%lu] and label_data[%lu]",
+              batch_size, label_data.size()));
 
-  void InitMetric(const std::string& name, const std::string& label_varname,
-                  const std::string& pred_varname, bool is_join,
+      std::vector<std::vector<float>> pred_data_list;
+      for (const auto& pred : pred_v) {
+        pred_data_list.emplace_back(get_data<float>(exe_scope, pred));
+      }
+      for (size_t i = 0; i < pred_data_list.size(); ++i) {
+        PADDLE_ENFORCE_EQ(
+            batch_size, pred_data_list[i].size(),
+            platform::errors::PreconditionNotMet(
+                "illegal batch size: batch_size[%lu] and pred_data[%lu]",
+                batch_size, pred_data_list[i].size()));
+      }
+      auto cal = GetCalculator();
+      for (size_t i = 0; i < batch_size; ++i) {
+        auto cmatch_rank_it =
+            std::find(cmatch_rank_v.begin(), cmatch_rank_v.end(),
+                      parse_cmatch_rank(cmatch_rank_data[i]));
+        if (cmatch_rank_it != cmatch_rank_v.end()) {
+          cal->add_data(pred_data_list[std::distance(cmatch_rank_v.begin(),
+                                                     cmatch_rank_it)][i],
+                        label_data[i]);
+        }
+      }
+    }
+
+   protected:
+    std::vector<std::pair<int, int>> cmatch_rank_v;
+    std::vector<std::string> pred_v;
+    std::string cmatch_rank_varname_;
+  };
+  class CmatchRankMetricMsg : public MetricMsg {
+   public:
+    CmatchRankMetricMsg(const std::string& label_varname,
+                        const std::string& pred_varname, int is_join,
+                        const std::string& cmatch_rank_group,
+                        const std::string& cmatch_rank_varname,
+                        int bucket_size = 1000000) {
+      label_varname_ = label_varname;
+      pred_varname_ = pred_varname;
+      cmatch_rank_varname_ = cmatch_rank_varname;
+      is_join_ = is_join;
+      calculator = new BasicAucCalculator();
+      calculator->init(bucket_size);
+      for (auto& cmatch_rank : string::split_string(cmatch_rank_group)) {
+        std::vector<std::string> cur_cmatch_rank =
+            string::split_string(cmatch_rank, "_");
+        PADDLE_ENFORCE_EQ(cur_cmatch_rank.size(), 2,
+                          platform::errors::PreconditionNotMet(
+                              "illegal cmatch_rank auc spec: %s", cmatch_rank));
+        cmatch_rank_v.emplace_back(atoi(cur_cmatch_rank[0].c_str()),
+                                   atoi(cur_cmatch_rank[1].c_str()));
+      }
+    }
+    virtual ~CmatchRankMetricMsg() {}
+    void add_data(const Scope* exe_scope) override {
+      std::vector<int64_t> cmatch_rank_data =
+          get_data<int64_t>(exe_scope, cmatch_rank_varname_);
+      std::vector<int64_t> label_data =
+          get_data<int64_t>(exe_scope, this->LabelVarname().c_str());
+      std::vector<float> pred_data =
+          get_data<float>(exe_scope, this->PredVarname().c_str());
+      size_t batch_size = cmatch_rank_data.size();
+      PADDLE_ENFORCE_EQ(
+          batch_size, label_data.size(),
+          platform::errors::PreconditionNotMet(
+              "illegal batch size: cmatch_rank[%lu] and label_data[%lu]",
+              batch_size, label_data.size()));
+      PADDLE_ENFORCE_EQ(
+          batch_size, pred_data.size(),
+          platform::errors::PreconditionNotMet(
+              "illegal batch size: cmatch_rank[%lu] and pred_data[%lu]",
+              batch_size, pred_data.size()));
+      auto cal = GetCalculator();
+      for (size_t i = 0; i < batch_size; ++i) {
+        const auto& cur_cmatch_rank = parse_cmatch_rank(cmatch_rank_data[i]);
+        for (size_t j = 0; j < cmatch_rank_v.size(); ++j) {
+          if (cmatch_rank_v[j] == cur_cmatch_rank) {
+            cal->add_data(pred_data[i], label_data[i]);
+            break;
+          }
+        }
+      }
+    }
+
+   protected:
+    std::vector<std::pair<int, int>> cmatch_rank_v;
+    std::string cmatch_rank_varname_;
+  };
+
+  int PassFlag() const { return pass_flag_; }
+  const std::vector<std::string>& GetMetricNameList() const {
+    return metric_name_list_;
+  }
+  void FlipPassFlag() { pass_flag_ = 1 - pass_flag_; }
+  std::map<std::string, MetricMsg*>& GetMetricList() { return metric_lists_; }
+
+  void InitMetric(const std::string& method, const std::string& name,
+                  const std::string& label_varname,
+                  const std::string& pred_varname,
+                  const std::string& cmatch_rank_varname, bool is_join,
+                  const std::string& cmatch_rank_group,
                   int bucket_size = 1000000) {
-    metric_lists_.emplace(name, MetricMsg(label_varname, pred_varname,
-                                          is_join ? 1 : 0, bucket_size));
-    need_metric_ = true;
+    if (method == "AucCalculator") {
+      metric_lists_.emplace(name, new MetricMsg(label_varname, pred_varname,
+                                                is_join ? 1 : 0, bucket_size));
+    } else if (method == "MultiTaskAucCalculator") {
+      metric_lists_.emplace(
+          name, new MultiTaskMetricMsg(label_varname, pred_varname,
+                                       is_join ? 1 : 0, cmatch_rank_group,
+                                       cmatch_rank_varname, bucket_size));
+    } else if (method == "CmatchRankAucCalculator") {
+      metric_lists_.emplace(
+          name, new CmatchRankMetricMsg(label_varname, pred_varname,
+                                        is_join ? 1 : 0, cmatch_rank_group,
+                                        cmatch_rank_varname, bucket_size));
+    } else {
+      PADDLE_THROW(platform::errors::Unimplemented(
+          "PaddleBox only support AucCalculator, MultiTaskAucCalculator and "
+          "CmatchRankAucCalculator"));
+    }
+    metric_name_list_.emplace_back(name);
   }
 
   const std::vector<float> GetMetricMsg(const std::string& name) {
@@ -276,7 +461,7 @@ class BoxWrapper {
     PADDLE_ENFORCE_NE(iter, metric_lists_.end(),
                       "The metric name you provided is not registered.");
     std::vector<float> metric_return_values_(8, 0.0);
-    auto* auc_cal_ = iter->second.GetCalculator();
+    auto* auc_cal_ = iter->second->GetCalculator();
     auc_cal_->calculate_bucket_error();
     auc_cal_->compute();
     metric_return_values_[0] = auc_cal_->auc();
@@ -306,8 +491,8 @@ class BoxWrapper {
  private:
   // Metric Related
   int pass_flag_ = 1;  // join: 1, update: 0
-  bool need_metric_ = false;
-  std::map<std::string, MetricMsg> metric_lists_;
+  std::map<std::string, MetricMsg*> metric_lists_;
+  std::vector<std::string> metric_name_list_;
   std::vector<int> slot_vector_;
   std::vector<LoDTensor> keys_tensor;  // Cache for pull_sparse
 };
