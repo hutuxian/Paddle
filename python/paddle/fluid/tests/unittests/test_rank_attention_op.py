@@ -24,8 +24,10 @@ import paddle.fluid.core as core
 def gen_input_help(input, rank_offset, max_rank):
     input_row, input_col = input.shape
     input_help = np.zeros((input_row, max_rank * input_col))
+    ins_rank = np.zeros((input_row, 1))
     for ins in range(input_row):
         temp = []
+        ins_rank[ins] = rank_offset[ins, 0]
         for k in range(max_rank):
             rank_msg = rank_offset[ins, k * 2 + 2]
             if rank_msg >= 0:
@@ -33,7 +35,7 @@ def gen_input_help(input, rank_offset, max_rank):
             else:
                 temp.extend(list(np.zeros(input_col)))
         input_help[ins, :] = temp
-    return input_help
+    return input_help, ins_rank
 
 
 def gen_param_help(input, rank_offset, rank_para, max_rank):
@@ -63,7 +65,7 @@ def np_rank_attention(input, rank_offset, rank_para, max_rank):
     assert (max_rank == ((rank_offset_col - 1) / 2))
     assert (rank_para_row == max_rank * max_rank * input_col)
 
-    input_help = gen_input_help(input, rank_offset, max_rank)
+    input_help, ins_rank = gen_input_help(input, rank_offset, max_rank)
     param_help = gen_param_help(input, rank_offset, rank_para, max_rank)
     block_matrix_row = input_col * max_rank
 
@@ -72,7 +74,7 @@ def np_rank_attention(input, rank_offset, rank_para, max_rank):
         res[ins, :] = \
             np.dot(input_help[ins, :],
                    param_help[int(block_matrix_row * ins):int(block_matrix_row * (ins+1)),:])
-    return res
+    return res, input_help, param_help, ins_rank
 
 
 def gen_rank_offset(pv_nums, max_rank):
@@ -113,16 +115,20 @@ class TestRankAttentionOpComplex(OpTest):
             self.max_rank * self.max_rank * self.x_feat, self.y_feat
         ]
         rank_para = np.random.random(rank_para_shape).astype(self.dtype)
-        np_res = np_rank_attention(input,
-                                   np.array(rank_offset), rank_para,
-                                   self.max_rank)
+        np_out, np_input_help, np_param_help, np_ins_rank = np_rank_attention(
+            input, np.array(rank_offset), rank_para, self.max_rank)
         self.inputs = {
             "X": input,
             "RankOffset": np.array(rank_offset).astype(self.dtype),
             "RankParam": rank_para
         }
-        self.attrs = {'MaxRank': self.max_rank, }
-        self.outputs = {'Out': np_res}
+        self.attrs = {'MaxRank': self.max_rank}
+        self.outputs = {
+            "Out": np_out,
+            "InputHelp": np_input_help,
+            "ParamHelp": np_param_help,
+            "InsRank": np_ins_rank
+        }
 
     def test_check_output(self):
         #self.check_output()

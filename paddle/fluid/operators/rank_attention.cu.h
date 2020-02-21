@@ -109,7 +109,7 @@ void expand_rank_attention_param(cudaStream_t stream, const T* input,
 template <typename T>
 __global__ void merge_param_gradient_kernel(
     T* expanded_grad, int expanded_grad_row, int expanded_grad_col,
-    T* param_grad, int param_grad_row, int param_grad_col, T* ins_rank,
+    T* param_grad, int param_grad_row, int param_grad_col, const T* ins_rank,
     int ins_num, int max_rank, int input_col) {
   CUDA_KERNEL_LOOP(tid, param_grad_row * param_grad_col) {
     int param_col_idx = tid % param_grad_col;
@@ -135,8 +135,8 @@ void merge_rank_attention_param_grad(cudaStream_t stream, T* expanded_grad,
                                      int expanded_grad_row,
                                      int expanded_grad_col, T* param_grad,
                                      int param_grad_row, int param_grad_col,
-                                     T* ins_rank, int ins_num, int max_rank,
-                                     int input_col) {
+                                     const T* ins_rank, int ins_num,
+                                     int max_rank, int input_col) {
   merge_param_gradient_kernel<<<GET_BLOCKS(param_grad_row * param_grad_col),
                                 CUDA_NUM_THREADS, 0, stream>>>(
       expanded_grad, expanded_grad_row, expanded_grad_col, param_grad,
@@ -147,7 +147,8 @@ template <typename T>
 __global__ void merge_input_gradient_kernel(
     T* expanded_grad, int expanded_grad_row, int expanded_grad_col,
     T* input_grad, int input_grad_row, int input_grad_col, const T* rank_offset,
-    int rank_offset_row, int rank_offset_col, T* ins_rank, int input_col) {
+    int rank_offset_row, int rank_offset_col, const T* ins_rank,
+    int input_col) {
   CUDA_KERNEL_LOOP(tid, input_grad_row * input_grad_col) {
     int input_col_idx = tid % input_grad_col;
     int input_row_idx = tid / input_grad_col;
@@ -175,7 +176,7 @@ void merge_rank_attention_input_grad(cudaStream_t stream, T* expanded_grad,
                                      int expanded_grad_col, T* input_grad,
                                      int input_grad_row, int input_grad_col,
                                      const T* rank_offset, int rank_offset_row,
-                                     int rank_offset_col, T* ins_rank,
+                                     int rank_offset_col, const T* ins_rank,
                                      int input_col) {
   merge_input_gradient_kernel<<<GET_BLOCKS(input_grad_row * input_grad_col),
                                 CUDA_NUM_THREADS, 0, stream>>>(
