@@ -26,15 +26,9 @@ from paddle.fluid.layers import utils
 from ... import unique_name
 
 __all__ = [
-    'fused_elemwise_activation',
-    'sequence_topk_avg_pooling',
-    'var_conv_2d',
-    'match_matrix_tensor',
-    'tree_conv',
-    'fused_embedding_seq_pool',
-    'multiclass_nms2',
-    'search_pyramid_hash',
-    'shuffle_batch',
+    'fused_elemwise_activation', 'sequence_topk_avg_pooling', 'var_conv_2d',
+    'match_matrix_tensor', 'tree_conv', 'fused_embedding_seq_pool',
+    'multiclass_nms2', 'search_pyramid_hash', 'shuffle_batch', 'rank_attention'
 ]
 
 
@@ -808,3 +802,35 @@ def shuffle_batch(x, seed=None):
                  'SeedOut': seed},
         attrs=op_attrs)
     return out
+
+
+def rank_attention(input,
+                   rank_offset,
+                   rank_para_shape,
+                   rank_param_attr,
+                   max_rank=3):
+    """
+    **Rank Attention layer**
+    """
+    helper = LayerHelper('rank_attention', **locals())
+    dtype = helper.input_dtype(input_param_name='input')
+    input_shape = input.shape
+    assert input_shape[1] * max_rank * max_rank == rank_para_shape[0]
+
+    rank_param = helper.create_parameter(
+        attr=rank_param_attr, shape=rank_para_shape, dtype=dtype)
+    rank_param.stop_gradient = False
+
+    output = helper.create_variable_for_type_inference(dtype)
+
+    helper.append_op(
+        type="rank_attention",
+        inputs={
+            "X": input,
+            "RankOffset": rank_offset,
+            "RankParam": rank_param
+        },
+        outputs={"Out": output},
+        attrs={"MaxRank": max_rank})
+
+    return output
