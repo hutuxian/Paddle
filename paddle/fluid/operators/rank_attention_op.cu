@@ -60,16 +60,6 @@ class RankAttentionCUDAKernel : public framework::OpKernel<T> {
 
     auto &dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
 
-    //    Tensor param_help;
-    //    Tensor input_help;
-    //    Tensor ins_rank;
-    //    param_help = ctx.AllocateTmpTensor<T, DeviceContext>(
-    //        {ins_num * block_matrix_row, para_col}, dev_ctx);
-    //    input_help = ctx.AllocateTmpTensor<T, DeviceContext>(
-    //        {ins_num, block_matrix_row}, dev_ctx);
-    //    ins_rank = ctx.AllocateTmpTensor<T, DeviceContext>({ins_num, 1},
-    //    dev_ctx);
-
     param_help->mutable_data<T>(ctx.GetPlace());
     input_help->mutable_data<T>(ctx.GetPlace());
     ins_rank->mutable_data<T>(ctx.GetPlace());
