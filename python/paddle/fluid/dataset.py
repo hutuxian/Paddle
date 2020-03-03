@@ -92,6 +92,19 @@ class DatasetBase(object):
         """
         self.proto_desc.pipe_command = pipe_command
 
+    def set_rank_offset(self, rank_offset):
+        """
+        Examples:
+            .. code-block:: python
+
+              import paddle.fluid as fluid
+              dataset = fluid.DatasetFactory().create_dataset()
+
+        Args:
+
+        """
+        self.proto_desc.rank_offset = rank_offset
+
     def set_fea_eval(self, record_candidate_size, fea_eval=True):
         """
         set fea eval mode for slots shuffle to debug the importance level of
@@ -308,8 +321,15 @@ class InMemoryDataset(DatasetBase):
         self.queue_num = None
         self.parse_ins_id = False
         self.parse_content = False
+        self.parse_logkey = False
         self.merge_by_lineid = False
         self.fleet_send_sleep_seconds = None
+
+    def set_feed_type(self, data_feed_type):
+        """
+        Set data_feed_desc
+        """
+        self.proto_desc.name = data_feed_type
 
     def _prepare_to_run(self):
         """
@@ -324,6 +344,7 @@ class InMemoryDataset(DatasetBase):
         self.dataset.set_queue_num(self.queue_num)
         self.dataset.set_parse_ins_id(self.parse_ins_id)
         self.dataset.set_parse_content(self.parse_content)
+        self.dataset.set_parse_logkey(self.parse_logkey)
         self.dataset.set_data_feed_desc(self.desc())
         self.dataset.create_channel()
         self.dataset.create_readers()
@@ -389,6 +410,60 @@ class InMemoryDataset(DatasetBase):
 
         """
         self.parse_content = parse_content
+
+    # FIXME for wasq model
+    def set_parse_logkey(self, parse_logkey):
+        """
+        Set if Dataset need to parse content
+
+        Args:
+            parse_content(bool): if parse content or not
+
+        Examples:
+            .. code-block:: python
+
+              import paddle.fluid as fluid
+              dataset = fluid.DatasetFactory().create_dataset("InMemoryDataset")
+              dataset.set_parse_logkey(True)
+
+        """
+        self.parse_logkey = parse_logkey
+
+    def merge_pv_instance(self):
+        """
+        merge pv instance and convey it to input_pv_channel
+
+        Examples:
+            .. code-block:: python
+
+              import paddle.fluid as fluid
+              dataset = fluid.DatasetFactory().create_dataset("InMemoryDataset")
+              filelist = ["a.txt", "b.txt"]
+              dataset.set_filelist(filelist)
+              dataset.load_into_memory()
+              dataset.merge_pv_instance()
+
+        """
+        self.dataset.merge_pv_instance()
+
+    def divide_pv_instance(self):
+        """
+        merge pv instance and convey it to input_pv_channel
+
+        Examples:
+            .. code-block:: python
+
+              import paddle.fluid as fluid
+              dataset = fluid.DatasetFactory().create_dataset("InMemoryDataset")
+              filelist = ["a.txt", "b.txt"]
+              dataset.set_filelist(filelist)
+              dataset.load_into_memory()
+              dataset.merge_pv_instance()
+              exe.train_from_dataset(dataset)
+              dataset.divide_pv_instance()
+
+        """
+        self.dataset.divide_pv_instance()
 
     def set_fleet_send_batch_size(self, fleet_send_batch_size=1024):
         """

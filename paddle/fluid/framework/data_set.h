@@ -65,6 +65,7 @@ class Dataset {
   // set parse ins id
   virtual void SetParseInsId(bool parse_ins_id) = 0;
   virtual void SetParseContent(bool parse_content) = 0;
+  virtual void SetParseLogKey(bool parse_logkey) = 0;
   // set merge by ins id
   virtual void SetMergeByInsId(int merge_size) = 0;
   virtual void SetGenerateUniqueFeasign(bool gen_uni_feasigns) = 0;
@@ -119,6 +120,14 @@ class Dataset {
   virtual int64_t GetShuffleDataSize() = 0;
   // merge by ins id
   virtual void MergeByInsId() = 0;
+  // shuffle by Pv instane
+  virtual void ShufflePVInstance() = 0;
+  // sort by search_id
+  virtual void SortBySearchId() = 0;
+  // merge pv instance
+  virtual void Merge_Pv_Instance() = 0;
+  // divide pv instance
+  virtual void Divide_Pv_Instance() = 0;
   virtual void GenerateLocalTablesUnlock(int table_id, int feadim,
                                          int read_thread_num,
                                          int consume_thread_num,
@@ -161,6 +170,7 @@ class DatasetImpl : public Dataset {
   virtual void SetChannelNum(int channel_num);
   virtual void SetParseInsId(bool parse_ins_id);
   virtual void SetParseContent(bool parse_content);
+  virtual void SetParseLogKey(bool parse_logkey);
   virtual void SetMergeByInsId(int merge_size);
   virtual void SetGenerateUniqueFeasign(bool gen_uni_feasigns);
   virtual void SetFeaEval(bool fea_eval, int record_candidate_size);
@@ -194,6 +204,10 @@ class DatasetImpl : public Dataset {
   virtual int64_t GetMemoryDataSize();
   virtual int64_t GetShuffleDataSize();
   virtual void MergeByInsId() {}
+  virtual void ShufflePVInstance() {}
+  virtual void SortBySearchId() {}
+  virtual void Merge_Pv_Instance() {}
+  virtual void Divide_Pv_Instance() {}
   virtual void GenerateLocalTablesUnlock(int table_id, int feadim,
                                          int read_thread_num,
                                          int consume_thread_num,
@@ -213,6 +227,11 @@ class DatasetImpl : public Dataset {
   std::vector<std::shared_ptr<paddle::framework::DataFeed>> readers_;
   std::vector<std::shared_ptr<paddle::framework::DataFeed>> preload_readers_;
   paddle::framework::Channel<T> input_channel_;
+  // FIXME for wasq model
+  paddle::framework::Channel<PvInstance> input_pv_channel_;
+  std::vector<paddle::framework::Channel<PvInstance>> multi_pv_output_;
+  std::vector<paddle::framework::Channel<PvInstance>> multi_pv_consume_;
+
   int channel_num_;
   std::vector<paddle::framework::Channel<T>> multi_output_channel_;
   std::vector<paddle::framework::Channel<T>> multi_consume_channel_;
@@ -238,6 +257,7 @@ class DatasetImpl : public Dataset {
   bool merge_by_insid_;
   bool parse_ins_id_;
   bool parse_content_;
+  bool parse_logkey_;
   size_t merge_size_;
   bool slots_shuffle_fea_eval_ = false;
   bool gen_uni_feasigns_ = false;
@@ -252,6 +272,10 @@ class MultiSlotDataset : public DatasetImpl<Record> {
  public:
   MultiSlotDataset() {}
   virtual void MergeByInsId();
+  virtual void ShufflePVInstance();
+  virtual void SortBySearchId();
+  virtual void Merge_Pv_Instance();
+  virtual void Divide_Pv_Instance();
   virtual void GenerateLocalTablesUnlock(int table_id, int feadim,
                                          int read_thread_num,
                                          int consume_thread_num, int shard_num);
@@ -266,6 +290,9 @@ class MultiSlotDataset : public DatasetImpl<Record> {
   virtual void GetRandomData(const std::set<uint16_t>& slots_to_replace,
                              std::vector<Record>* result);
   virtual ~MultiSlotDataset() {}
+
+  //  protected:
+  //  paddle::framework::Channel<PVInstance> input_pv_channel_;
 };
 
 }  // end namespace framework

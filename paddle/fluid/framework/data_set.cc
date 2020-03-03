@@ -49,6 +49,7 @@ DatasetImpl<T>::DatasetImpl() {
   merge_size_ = 2;
   parse_ins_id_ = false;
   parse_content_ = false;
+  parse_logkey_ = false;
   preload_thread_num_ = 0;
   global_index_ = 0;
 }
@@ -127,6 +128,11 @@ void DatasetImpl<T>::SetParseContent(bool parse_content) {
 }
 
 template <typename T>
+void DatasetImpl<T>::SetParseLogKey(bool parse_logkey) {
+  parse_logkey_ = parse_logkey;
+}
+
+template <typename T>
 void DatasetImpl<T>::SetMergeByInsId(int merge_size) {
   merge_by_insid_ = true;
   parse_ins_id_ = true;
@@ -174,6 +180,23 @@ void DatasetImpl<T>::CreateChannel() {
       multi_consume_channel_.push_back(paddle::framework::MakeChannel<T>());
     }
   }
+
+  // FIXME for wasq model
+  if (input_pv_channel_ == nullptr) {
+    input_pv_channel_ = paddle::framework::MakeChannel<PvInstance>();
+  }
+  if (multi_pv_output_.size() == 0) {
+    multi_pv_output_.reserve(channel_num_);
+    for (int i = 0; i < channel_num_; ++i) {
+      multi_pv_output_.push_back(paddle::framework::MakeChannel<PvInstance>());
+    }
+  }
+  if (multi_pv_consume_.size() == 0) {
+    multi_pv_consume_.reserve(channel_num_);
+    for (int i = 0; i < channel_num_; ++i) {
+      multi_pv_consume_.push_back(paddle::framework::MakeChannel<PvInstance>());
+    }
+  }
 }
 
 // if sent message between workers, should first call this function
@@ -206,6 +229,7 @@ void DatasetImpl<T>::LoadIntoMemory() {
   input_channel_->Close();
   int64_t in_chan_size = input_channel_->Size();
   input_channel_->SetBlockSize(in_chan_size / thread_num_ + 1);
+
   timeline.Pause();
   VLOG(3) << "DatasetImpl<T>::LoadIntoMemory() end"
           << ", memory data size=" << input_channel_->Size()
@@ -270,6 +294,29 @@ void DatasetImpl<T>::ReleaseMemory() {
     multi_consume_channel_[i] = nullptr;
   }
   std::vector<paddle::framework::Channel<T>>().swap(multi_consume_channel_);
+
+  // FIXME for wasq
+  if (input_pv_channel_) {
+    input_pv_channel_->Clear();
+    input_pv_channel_ = nullptr;
+  }
+  for (size_t i = 0; i < multi_pv_output_.size(); ++i) {
+    if (!multi_output_channel_[i]) {
+      continue;
+    }
+    multi_pv_output_[i]->Clear();
+    multi_pv_output_[i] = nullptr;
+  }
+  std::vector<paddle::framework::Channel<PvInstance>>().swap(multi_pv_output_);
+  for (size_t i = 0; i < multi_pv_consume_.size(); ++i) {
+    if (!multi_pv_consume_[i]) {
+      continue;
+    }
+    multi_pv_consume_[i]->Clear();
+    multi_pv_consume_[i] = nullptr;
+  }
+  std::vector<paddle::framework::Channel<PvInstance>>().swap(multi_pv_consume_);
+
   std::vector<std::shared_ptr<paddle::framework::DataFeed>>().swap(readers_);
   VLOG(3) << "DatasetImpl<T>::ReleaseMemory() end";
 }
@@ -412,6 +459,12 @@ void DatasetImpl<T>::DynamicAdjustChannelNum(int channel_num,
   channel_num_ = channel_num;
   std::vector<paddle::framework::Channel<T>>* origin_channels = nullptr;
   std::vector<paddle::framework::Channel<T>>* other_channels = nullptr;
+  // FIXME for wasq model
+  std::vector<paddle::framework::Channel<PvInstance>>* origin_pv_channels =
+      nullptr;
+  std::vector<paddle::framework::Channel<PvInstance>>* other_pv_channels =
+      nullptr;
+
   // find out which channel (output or consume) has data
   int cur_channel = 0;
   uint64_t output_channels_data_size = 0;
@@ -431,17 +484,30 @@ void DatasetImpl<T>::DynamicAdjustChannelNum(int channel_num,
   if (cur_channel == 0) {
     origin_channels = &multi_output_channel_;
     other_channels = &multi_consume_channel_;
+    // FIXME for wasq model
+    origin_pv_channels = &multi_pv_output_;
+    other_pv_channels = &multi_pv_consume_;
   } else {
     origin_channels = &multi_consume_channel_;
     other_channels = &multi_output_channel_;
+    // FIXME for wasq model
+    origin_pv_channels = &multi_pv_consume_;
+    other_pv_channels = &multi_pv_output_;
   }
   CHECK(origin_channels != nullptr);  // NOLINT
   CHECK(other_channels != nullptr);   // NOLINT
+  // FIXME for wasq model
+  CHECK(origin_pv_channels != nullptr);  // NOLINT
+  CHECK(other_pv_channels != nullptr);   // NOLINT
 
   paddle::framework::Channel<T> total_data_channel =
       paddle::framework::MakeChannel<T>();
   std::vector<paddle::framework::Channel<T>> new_channels;
   std::vector<paddle::framework::Channel<T>> new_other_channels;
+  // FIXME for wasq model
+  std::vector<paddle::framework::Channel<PvInstance>> new_pv_channels;
+  std::vector<paddle::framework::Channel<PvInstance>> new_other_pv_channels;
+
   std::vector<T> local_vec;
   for (size_t i = 0; i < origin_channels->size(); ++i) {
     local_vec.clear();
@@ -458,6 +524,14 @@ void DatasetImpl<T>::DynamicAdjustChannelNum(int channel_num,
     input_channel_->SetBlockSize(input_channel_->Size() / channel_num +
                                  (discard_remaining_ins ? 0 : 1));
   }
+  // FIXME for wasq model
+  VLOG(3) << "input_pv_channle block size is "
+          << input_pv_channel_->BlockSize();
+  if (static_cast<int>(input_pv_channel_->Size()) >= channel_num) {
+    input_pv_channel_->SetBlockSize(input_pv_channel_->Size() / channel_num);
+    VLOG(3) << "now input_pv_channle block size is "
+            << input_pv_channel_->BlockSize();
+  }
 
   for (int i = 0; i < channel_num; ++i) {
     local_vec.clear();
@@ -465,6 +539,10 @@ void DatasetImpl<T>::DynamicAdjustChannelNum(int channel_num,
     new_other_channels.push_back(paddle::framework::MakeChannel<T>());
     new_channels.push_back(paddle::framework::MakeChannel<T>());
     new_channels[i]->Write(std::move(local_vec));
+    // FIXME for wasq model
+    new_other_pv_channels.push_back(
+        paddle::framework::MakeChannel<PvInstance>());
+    new_pv_channels.push_back(paddle::framework::MakeChannel<PvInstance>());
   }
 
   total_data_channel->Clear();
@@ -473,10 +551,24 @@ void DatasetImpl<T>::DynamicAdjustChannelNum(int channel_num,
   *origin_channels = new_channels;
   *other_channels = new_other_channels;
 
+  // FIXME for wasq
+  origin_pv_channels->clear();
+  other_pv_channels->clear();
+  *origin_pv_channels = new_pv_channels;
+  *other_pv_channels = new_other_pv_channels;
+
   new_channels.clear();
   new_other_channels.clear();
   std::vector<paddle::framework::Channel<T>>().swap(new_channels);
   std::vector<paddle::framework::Channel<T>>().swap(new_other_channels);
+
+  // FIXME for wasq
+  new_pv_channels.clear();
+  new_other_pv_channels.clear();
+  std::vector<paddle::framework::Channel<PvInstance>>().swap(new_pv_channels);
+  std::vector<paddle::framework::Channel<PvInstance>>().swap(
+      new_other_pv_channels);
+
   local_vec.clear();
   std::vector<T>().swap(local_vec);
   VLOG(3) << "adjust channel num done";
@@ -528,17 +620,27 @@ void DatasetImpl<T>::CreateReaders() {
     readers_[i]->SetFileList(filelist_);
     readers_[i]->SetParseInsId(parse_ins_id_);
     readers_[i]->SetParseContent(parse_content_);
+    readers_[i]->SetParseLogKey(parse_logkey_);
     if (input_channel_ != nullptr) {
       readers_[i]->SetInputChannel(input_channel_.get());
+      // FIXME for wasq model
+      readers_[i]->SetInputPvChannel(input_pv_channel_.get());
     }
     if (cur_channel_ == 0 &&
         static_cast<size_t>(channel_idx) < multi_output_channel_.size()) {
       readers_[i]->SetOutputChannel(multi_output_channel_[channel_idx].get());
       readers_[i]->SetConsumeChannel(multi_consume_channel_[channel_idx].get());
+      // FIXME for wasq model
+      readers_[i]->SetOutputPvChannel(multi_pv_output_[channel_idx].get());
+      readers_[i]->SetConsumePvChannel(multi_pv_consume_[channel_idx].get());
     } else if (static_cast<size_t>(channel_idx) <
                multi_output_channel_.size()) {
       readers_[i]->SetOutputChannel(multi_consume_channel_[channel_idx].get());
       readers_[i]->SetConsumeChannel(multi_output_channel_[channel_idx].get());
+
+      // FIXME for wasq model
+      readers_[i]->SetOutputPvChannel(multi_pv_consume_[channel_idx].get());
+      readers_[i]->SetConsumePvChannel(multi_pv_output_[channel_idx].get());
     }
     ++channel_idx;
     if (channel_idx >= channel_num_) {
@@ -583,6 +685,7 @@ void DatasetImpl<T>::CreatePreLoadReaders() {
     preload_readers_[i]->SetFileList(filelist_);
     preload_readers_[i]->SetParseInsId(parse_ins_id_);
     preload_readers_[i]->SetParseContent(parse_content_);
+    preload_readers_[i]->SetParseLogKey(parse_logkey_);
     preload_readers_[i]->SetInputChannel(input_channel_.get());
     preload_readers_[i]->SetOutputChannel(nullptr);
     preload_readers_[i]->SetConsumeChannel(nullptr);
@@ -657,6 +760,115 @@ int DatasetImpl<T>::ReceiveFromClient(int msg_type, int client_id,
 // explicit instantiation
 template class DatasetImpl<Record>;
 
+void MultiSlotDataset::ShufflePVInstance() { return; }
+
+void MultiSlotDataset::Divide_Pv_Instance() {
+  // divide pv instance, and merge to input_channel_
+  VLOG(3) << "MultiSlotDataset::Divide_Pv_Instance begin";
+  platform::Timer timeline;
+  timeline.Start();
+
+  VLOG(3) << "multi_pv_consume_.size() " << multi_pv_consume_.size();
+  input_channel_->Open();
+  for (size_t i = 0; i < multi_pv_consume_.size(); ++i) {
+    std::vector<PvInstance> pv_data;
+    multi_pv_consume_[i]->Close();
+    multi_pv_consume_[i]->ReadAll(pv_data);
+    for (size_t j = 0; j < pv_data.size(); ++j) {
+      input_channel_->Write(std::move(pv_data[j].ads));
+    }
+    pv_data.clear();
+    pv_data.shrink_to_fit();
+    multi_pv_consume_[i]->Clear();
+  }
+  input_channel_->Close();
+  // shuffle input_channel_
+  this->LocalShuffle();
+
+  timeline.Pause();
+  VLOG(3) << "MultiSlotDataset::Divide_Pv_Instance end, cost time="
+          << timeline.ElapsedSec() << " seconds";
+  VLOG(3) << "input_channel_ has " << input_channel_->Size() << " instances";
+}
+
+void MultiSlotDataset::Merge_Pv_Instance() {
+  VLOG(3) << "MultiSlotDataset::Merge_Pv_Instance begin";
+  platform::Timer timeline;
+  timeline.Start();
+
+  if (!input_channel_ || input_channel_->Size() == 0) {
+    VLOG(3) << "MultiSlotDataset::SortBySearchId() end, no data to shuffle";
+    return;
+  }
+  auto fleet_ptr = FleetWrapper::GetInstance();
+  input_channel_->Close();
+  std::vector<Record> ins_data;
+  std::vector<PvInstance> pv_data;
+  input_channel_->ReadAll(ins_data);
+  std::sort(ins_data.data(), ins_data.data() + ins_data.size(),
+            [](const Record& lhs, const Record& rhs) {
+              return lhs.search_id < rhs.search_id;
+            });
+  uint64_t last_search_id = 0;
+  for (size_t i = 0; i < ins_data.size(); ++i) {
+    Record& ins = ins_data[i];
+    if (i == 0 || last_search_id != ins.search_id) {
+      PvInstance pv_instance;
+      pv_instance.merge_instance(ins);
+      pv_data.push_back(pv_instance);
+      last_search_id = ins.search_id;
+      continue;
+    }
+    pv_data.back().merge_instance(ins);
+  }
+
+  std::shuffle(pv_data.begin(), pv_data.end(), fleet_ptr->LocalRandomEngine());
+
+  input_pv_channel_->Open();
+  input_pv_channel_->Write(std::move(pv_data));
+  auto in_pv_size = input_pv_channel_->Size();
+  input_pv_channel_->SetBlockSize(in_pv_size / thread_num_ + 1);
+
+  ins_data.clear();
+  ins_data.shrink_to_fit();
+  pv_data.clear();
+  pv_data.shrink_to_fit();
+  input_pv_channel_->Close();
+
+  timeline.Pause();
+  VLOG(3) << "MultiSlotDataset::Merge_Pv_Instance end, cost time="
+          << timeline.ElapsedSec() << " seconds";
+  VLOG(3) << "input_pv_channel has " << input_pv_channel_->Size()
+          << " pv instance";
+}
+
+void MultiSlotDataset::SortBySearchId() {
+  VLOG(3) << "MultiSlotDataset::SortBySearchId begin";
+  platform::Timer timeline;
+  timeline.Start();
+
+  if (!input_channel_ || input_channel_->Size() == 0) {
+    VLOG(3) << "MultiSlotDataset::SortBySearchId() end, no data to shuffle";
+    return;
+  }
+  auto fleet_ptr = FleetWrapper::GetInstance();
+  input_channel_->Close();
+  std::vector<Record> data;
+  input_channel_->ReadAll(data);
+  std::shuffle(data.begin(), data.end(), fleet_ptr->LocalRandomEngine());
+
+  input_channel_->Open();
+  input_channel_->Write(std::move(data));
+  data.clear();
+  data.shrink_to_fit();
+  input_channel_->Close();
+
+  timeline.Pause();
+  VLOG(3) << "MultiSlotDataset::SortBySearchId() end, cost time="
+          << timeline.ElapsedSec() << " seconds";
+
+  return;
+}
 void MultiSlotDataset::GenerateLocalTablesUnlock(int table_id, int feadim,
                                                  int read_thread_num,
                                                  int consume_thread_num,

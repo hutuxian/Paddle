@@ -58,6 +58,54 @@ namespace framework {
 //   while (reader->Next()) {
 //      // trainer do something
 //   }
+union FeatureKey {
+  uint64_t uint64_feasign_;
+  float float_feasign_;
+};
+
+struct FeatureItem {
+  FeatureItem() {}
+  FeatureItem(FeatureKey sign, uint16_t slot) {
+    this->sign() = sign;
+    this->slot() = slot;
+  }
+  FeatureKey& sign() { return *(reinterpret_cast<FeatureKey*>(sign_buffer())); }
+  const FeatureKey& sign() const {
+    const FeatureKey* ret = reinterpret_cast<FeatureKey*>(sign_buffer());
+    return *ret;
+  }
+  uint16_t& slot() { return slot_; }
+  const uint16_t& slot() const { return slot_; }
+
+ private:
+  char* sign_buffer() const { return const_cast<char*>(sign_); }
+  char sign_[sizeof(FeatureKey)];
+  uint16_t slot_;
+};
+
+// sizeof Record is much less than std::vector<MultiSlotType>
+struct Record {
+  std::vector<FeatureItem> uint64_feasigns_;
+  std::vector<FeatureItem> float_feasigns_;
+  std::string ins_id_;
+  std::string content_;
+  uint64_t search_id;
+  uint32_t rank;
+  uint32_t cmatch;
+};
+
+// FIXME for wasq model -> Pv instance
+struct PvInstance {
+  std::vector<Record> ads;
+  uint64_t search_id_;
+  // void set_pv_id(uint64_t search_id){
+  //  search_id_ = search_id;
+  //}
+  void merge_instance(Record ins) {
+    ads.push_back(ins);
+    search_id_ = ins.search_id;
+  }
+};
 class DataFeed {
  public:
   DataFeed() {
@@ -93,6 +141,14 @@ class DataFeed {
   // This function is used for binding feed_vec memory in a given scope
   virtual void AssignFeedVar(const Scope& scope);
 
+  // FIXME for wasq model
+  // This function will do nothing at default
+  virtual void SetInputPvChannel(void* channel) {}
+  // This function will do nothing at default
+  virtual void SetOutputPvChannel(void* channel) {}
+  // This function will do nothing at default
+  virtual void SetConsumePvChannel(void* channel) {}
+
   // This function will do nothing at default
   virtual void SetInputChannel(void* channel) {}
   // This function will do nothing at default
@@ -106,6 +162,7 @@ class DataFeed {
   // This function will do nothing at default
   virtual void SetParseInsId(bool parse_ins_id) {}
   virtual void SetParseContent(bool parse_content) {}
+  virtual void SetParseLogKey(bool parse_logkey) {}
   virtual void SetFileListMutex(std::mutex* mutex) {
     mutex_for_pick_file_ = mutex;
   }
@@ -162,6 +219,9 @@ class DataFeed {
 
   // The data read by DataFeed will be stored here
   std::vector<LoDTensor*> feed_vec_;
+
+  // FIXME for wasq model
+  Tensor* rank_offset_;
 
   // the batch size defined by user
   int default_batch_size_;
@@ -226,6 +286,11 @@ class InMemoryDataFeed : public DataFeed {
   virtual void Init(const DataFeedDesc& data_feed_desc) = 0;
   virtual bool Start();
   virtual int Next();
+  // FIXME for wasq model
+  virtual void SetInputPvChannel(void* channel);
+  virtual void SetOutputPvChannel(void* channel);
+  virtual void SetConsumePvChannel(void* channel);
+
   virtual void SetInputChannel(void* channel);
   virtual void SetOutputChannel(void* channel);
   virtual void SetConsumeChannel(void* channel);
@@ -233,6 +298,7 @@ class InMemoryDataFeed : public DataFeed {
   virtual void SetThreadNum(int thread_num);
   virtual void SetParseInsId(bool parse_ins_id);
   virtual void SetParseContent(bool parse_content);
+  virtual void SetParseLogKey(bool parse_logkey);
   virtual void LoadIntoMemory();
 
  protected:
@@ -244,11 +310,17 @@ class InMemoryDataFeed : public DataFeed {
   int thread_num_;
   bool parse_ins_id_;
   bool parse_content_;
+  bool parse_logkey_;
   std::ifstream file_;
   std::shared_ptr<FILE> fp_;
   paddle::framework::ChannelObject<T>* input_channel_;
   paddle::framework::ChannelObject<T>* output_channel_;
   paddle::framework::ChannelObject<T>* consume_channel_;
+
+  // FIXME for wasq model
+  paddle::framework::ChannelObject<PvInstance>* input_pv_channel_;
+  paddle::framework::ChannelObject<PvInstance>* output_pv_channel_;
+  paddle::framework::ChannelObject<PvInstance>* consume_pv_channel_;
 };
 
 // This class define the data type of instance(ins_vec) in MultiSlotDataFeed
@@ -408,39 +480,6 @@ paddle::framework::Archive<AR>& operator>>(paddle::framework::Archive<AR>& ar,
   return ar;
 }
 
-union FeatureKey {
-  uint64_t uint64_feasign_;
-  float float_feasign_;
-};
-
-struct FeatureItem {
-  FeatureItem() {}
-  FeatureItem(FeatureKey sign, uint16_t slot) {
-    this->sign() = sign;
-    this->slot() = slot;
-  }
-  FeatureKey& sign() { return *(reinterpret_cast<FeatureKey*>(sign_buffer())); }
-  const FeatureKey& sign() const {
-    const FeatureKey* ret = reinterpret_cast<FeatureKey*>(sign_buffer());
-    return *ret;
-  }
-  uint16_t& slot() { return slot_; }
-  const uint16_t& slot() const { return slot_; }
-
- private:
-  char* sign_buffer() const { return const_cast<char*>(sign_); }
-  char sign_[sizeof(FeatureKey)];
-  uint16_t slot_;
-};
-
-// sizeof Record is much less than std::vector<MultiSlotType>
-struct Record {
-  std::vector<FeatureItem> uint64_feasigns_;
-  std::vector<FeatureItem> float_feasigns_;
-  std::string ins_id_;
-  std::string content_;
-};
-
 struct RecordCandidate {
   std::string ins_id_;
   std::unordered_multimap<uint16_t, FeatureKey> feas;
@@ -557,6 +596,26 @@ class MultiSlotInMemoryDataFeed : public InMemoryDataFeed<Record> {
   virtual bool ParseOneInstance(Record* instance);
   virtual bool ParseOneInstanceFromPipe(Record* instance);
   virtual void PutToFeedVec(const std::vector<Record>& ins_vec);
+  virtual void GetMsgFromLogKey(const std::string& log_key, uint64_t* search_id,
+                                uint32_t* cmatch, uint32_t* rank);
+};
+
+// FIXME for wasq two phase
+class TwoPhaseDataFeed : public MultiSlotInMemoryDataFeed {
+ public:
+  TwoPhaseDataFeed() {}
+  virtual ~TwoPhaseDataFeed() {}
+
+ protected:
+  virtual void Init(const DataFeedDesc& data_feed_desc);
+  virtual bool Start();
+  virtual int Next();
+  virtual void AssignFeedVar(const Scope& scope);
+  virtual void PutToFeedVec(const std::vector<PvInstance>& pv_vec);
+  virtual int GetCurrentPhase();
+  virtual void GetRankOffset(const std::vector<PvInstance>& pv_vec,
+                             int ins_number);
+  std::string rank_offset_name;
 };
 
 #if defined(PADDLE_WITH_CUDA) && !defined(_WIN32)

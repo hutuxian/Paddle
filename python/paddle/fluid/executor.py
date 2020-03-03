@@ -1116,7 +1116,7 @@ class Executor(object):
             self._default_executor.run_from_dataset(trainer_instance)
             self._default_executor.release_trainer(trainer_instance)
 
-        dataset._dynamic_adjust_after_train()
+        # dataset._dynamic_adjust_after_train()
         dataset._finish_to_run()
 
         return None
