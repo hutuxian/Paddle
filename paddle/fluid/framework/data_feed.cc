@@ -1382,7 +1382,7 @@ void TwoPhaseDataFeed::AssignFeedVar(const Scope& scope) {
 
 void TwoPhaseDataFeed::PutToFeedVec(const std::vector<PvInstance>& pv_vec) {
   // Todo get rank_offset msg
-  CHECK_EQ(GetCurrentPhase() == 1);
+  // CHECK_EQ(GetCurrentPhase() == 1);
   int ins_number = 0;
   std::vector<Record> ins_vec;
   for (auto& pv : pv_vec) {
