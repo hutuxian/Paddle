@@ -81,14 +81,14 @@ void AdamOp::InferShape(framework::InferShapeContext *ctx) const {
           "Learning rate should have 1 dimension, but received %d",
           framework::product(lr_dims)));
   auto beta1_pow_dims = ctx->GetInputDim("Beta1Pow");
-  VLOG(3) << "dims of Beta1Pow : [" << beta1_pow_dims << "]";
+  // VLOG(3) << "dims of Beta1Pow : [" << beta1_pow_dims << "]";
   PADDLE_ENFORCE_GE(framework::product(beta1_pow_dims), 1,
                     platform::errors::InvalidArgument(
                         "The size of Beta1 power accumulator should be greater "
                         "than 0, but received %d.",
                         framework::product(beta1_pow_dims)));
   auto beta2_pow_dims = ctx->GetInputDim("Beta2Pow");
-  VLOG(3) << "dims of Beta2Pow : [" << beta2_pow_dims << "]";
+  // VLOG(3) << "dims of Beta2Pow : [" << beta2_pow_dims << "]";
   PADDLE_ENFORCE_GE(framework::product(beta2_pow_dims), 1,
                     platform::errors::InvalidArgument(
                         "The size of Beta2 power accumulator should be greater "

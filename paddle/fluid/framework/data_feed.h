@@ -221,7 +221,7 @@ class DataFeed {
   std::vector<LoDTensor*> feed_vec_;
 
   // FIXME for wasq model
-  Tensor* rank_offset_;
+  LoDTensor* rank_offset_;
 
   // the batch size defined by user
   int default_batch_size_;

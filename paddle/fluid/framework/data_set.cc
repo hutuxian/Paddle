@@ -300,22 +300,24 @@ void DatasetImpl<T>::ReleaseMemory() {
     input_pv_channel_->Clear();
     input_pv_channel_ = nullptr;
   }
-  for (size_t i = 0; i < multi_pv_output_.size(); ++i) {
-    if (!multi_output_channel_[i]) {
-      continue;
-    }
-    multi_pv_output_[i]->Clear();
-    multi_pv_output_[i] = nullptr;
-  }
-  std::vector<paddle::framework::Channel<PvInstance>>().swap(multi_pv_output_);
-  for (size_t i = 0; i < multi_pv_consume_.size(); ++i) {
-    if (!multi_pv_consume_[i]) {
-      continue;
-    }
-    multi_pv_consume_[i]->Clear();
-    multi_pv_consume_[i] = nullptr;
-  }
-  std::vector<paddle::framework::Channel<PvInstance>>().swap(multi_pv_consume_);
+  // for (size_t i = 0; i < multi_pv_output_.size(); ++i) {
+  //  if (!multi_output_channel_[i]) {
+  //    continue;
+  //  }
+  //  multi_pv_output_[i]->Clear();
+  //  multi_pv_output_[i] = nullptr;
+  //}
+  ////
+  // std::vector<paddle::framework::Channel<PvInstance>>()
+  // .swap(multi_pv_output_);
+  // for (size_t i = 0; i < multi_pv_consume_.size(); ++i) {
+  //  if (!multi_pv_consume_[i]) {
+  //    continue;
+  //  }
+  //  multi_pv_consume_[i]->Clear();
+  //  multi_pv_consume_[i] = nullptr;
+  //}
+  // std::vector<paddle::framework::Channel<PvInstance>>().swap(multi_pv_consume_);
 
   std::vector<std::shared_ptr<paddle::framework::DataFeed>>().swap(readers_);
   VLOG(3) << "DatasetImpl<T>::ReleaseMemory() end";

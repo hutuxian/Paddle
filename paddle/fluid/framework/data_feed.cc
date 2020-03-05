@@ -788,7 +788,6 @@ void MultiSlotInMemoryDataFeed::GetMsgFromLogKey(const std::string& log_key,
                                                  uint64_t* search_id,
                                                  uint32_t* cmatch,
                                                  uint32_t* rank) {
-  VLOG(3) << "log_key " << log_key;
   std::string searchid_str = log_key.substr(16, 16);
   *search_id = (uint64_t)strtoull(searchid_str.c_str(), NULL, 16);
 
@@ -798,9 +797,9 @@ void MultiSlotInMemoryDataFeed::GetMsgFromLogKey(const std::string& log_key,
   std::string rank_str = log_key.substr(14, 2);
   *rank = (uint32_t)strtoul(rank_str.c_str(), NULL, 16);
 
-  VLOG(3) << "search_id " << search_id;
-  VLOG(3) << "cmatch " << cmatch;
-  VLOG(3) << "rank " << rank;
+  // VLOG(3) << "search_id " << search_id;
+  // VLOG(3) << "cmatch " << cmatch;
+  // VLOG(3) << "rank " << rank;
 }
 
 bool MultiSlotInMemoryDataFeed::ParseOneInstanceFromPipe(Record* instance) {
@@ -1353,7 +1352,11 @@ void TwoPhaseDataFeed::GetRankOffset(const std::vector<PvInstance>& pv_vec,
       if (rank > 0) {
         for (int k = 0; k < ad_num; ++k) {
           int fast_rank = pv_ins.ads[k].rank;
-          // CHECK(fast_rank <= _max_rank) << "fast_rank: " << fast_rank;
+          if (fast_rank > 3) {
+            // std::cerr << "fast_rank  " << fast_rank << std::endl;
+            fast_rank = 3;
+          }
+          // CHECK(fast_rank <= 3);
           if (fast_rank > 0) {
             int m = fast_rank - 1;
             rank_offset_mat[index * col + 2 * m + 1] = pv_ins.ads[k].rank;
@@ -1364,19 +1367,22 @@ void TwoPhaseDataFeed::GetRankOffset(const std::vector<PvInstance>& pv_vec,
       index += 1;
     }
   }
-
+  // VLOG(3) << "rank_offset_mat  " << rank_offset_mat.size();
   int* rank_offset = rank_offset_mat.data();
-  CopyToFeedTensor(rank_offset_, rank_offset, row * col * sizeof(int));
+  int* tensor_ptr = rank_offset_->mutable_data<int>({row, col}, this->place_);
+  CopyToFeedTensor(tensor_ptr, rank_offset, row * col * sizeof(int));
 }
 
 void TwoPhaseDataFeed::AssignFeedVar(const Scope& scope) {
   MultiSlotInMemoryDataFeed::AssignFeedVar(scope);
   // set rank offset memory
-  rank_offset_ = scope.FindVar(rank_offset_name)->GetMutable<Tensor>();
+  if (GetCurrentPhase() == 1)
+    rank_offset_ = scope.FindVar(rank_offset_name)->GetMutable<LoDTensor>();
 }
 
 void TwoPhaseDataFeed::PutToFeedVec(const std::vector<PvInstance>& pv_vec) {
   // Todo get rank_offset msg
+  CHECK_EQ(GetCurrentPhase() == 1);
   int ins_number = 0;
   std::vector<Record> ins_vec;
   for (auto& pv : pv_vec) {
@@ -1386,6 +1392,7 @@ void TwoPhaseDataFeed::PutToFeedVec(const std::vector<PvInstance>& pv_vec) {
     }
   }
   GetRankOffset(pv_vec, ins_number);
+  VLOG(3) << "Rank offset is obtained.. ins_number is " << ins_number;
   MultiSlotInMemoryDataFeed::PutToFeedVec(ins_vec);
 }
 

@@ -159,9 +159,9 @@ class AdamOpCUDAKernel : public framework::OpKernel<T> {
       auto* beta2_tensor = ctx.Input<framework::Tensor>("Beta2Tensor");
       beta2 = static_cast<T>(GetAttrFromTensor(beta2_tensor));
     }
-    VLOG(3) << "beta1_pow.numel() : " << beta1_pow->numel()
-            << "beta2_pow.numel() : " << beta2_pow->numel();
-    VLOG(3) << "param.numel(): " << param->numel();
+    // VLOG(3) << "beta1_pow.numel() : " << beta1_pow->numel()
+    //        << "beta2_pow.numel() : " << beta2_pow->numel();
+    // VLOG(3) << "param.numel(): " << param->numel();
     PADDLE_ENFORCE_EQ(beta1_pow_out->numel(), 1,
                       platform::errors::InvalidArgument(
                           "beta1 pow output size should be 1, but received "
@@ -213,7 +213,7 @@ class AdamOpCUDAKernel : public framework::OpKernel<T> {
     } else if (grad_var->IsType<framework::SelectedRows>()) {
       auto* grad = ctx.Input<framework::SelectedRows>("Grad");
       if (grad->rows().size() == 0) {
-        VLOG(3) << "grad row size is 0!!";
+        // VLOG(3) << "grad row size is 0!!";
         return;
       }
 
