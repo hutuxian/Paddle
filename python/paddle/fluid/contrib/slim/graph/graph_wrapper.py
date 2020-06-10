@@ -35,6 +35,7 @@ OPTIMIZER_OPS = [
     'adagrad',
     'adam',
     'adamax',
+    'adam_scale',
     'dpsgd',
     'decayed_adagrad',
     'adadelta',
