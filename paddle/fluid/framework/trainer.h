@@ -159,10 +159,12 @@ class PipelineTrainer : public TrainerBase {
       std::vector<std::shared_ptr<paddle::framework::DeviceWorker>>>>
       workers_;
   std::vector<std::thread> section_threads_;
+  std::vector<std::thread> read_threads_;
 
   // We use scope to maintain context info, and scopes
   // will be deliverd between different sections.
   std::vector<std::vector<std::unique_ptr<ScopeQueue>>> scope_queues_;
+  // std::vector<std::vector<std::unique_ptr<ScopeQueue>>> calc_scope_queues_;
   std::vector<Scope*> pipeline_scopes_;
 
   // The parameters that should be syncronized between different cards using

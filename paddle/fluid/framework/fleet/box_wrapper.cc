@@ -116,6 +116,7 @@ void BoxWrapper::PullSparse(const paddle::platform::Place& place,
     EMBEDX_CASE(8, PULLSPARSE_CASE(0); PULLSPARSE_CASE(8);
                 PULLSPARSE_CASE(64););
     EMBEDX_CASE(16, PULLSPARSE_CASE(0););
+    EMBEDX_CASE(256, PULLSPARSE_CASE(0););
     default:
       PADDLE_THROW(platform::errors::InvalidArgument(
           "Unsupport this embedding size [%d]", hidden_size - 3));
@@ -155,6 +156,7 @@ void BoxWrapper::PushSparseGrad(const paddle::platform::Place& place,
     EMBEDX_CASE(8, PUSHSPARSE_CASE(0); PUSHSPARSE_CASE(8);
                 PUSHSPARSE_CASE(64););
     EMBEDX_CASE(16, PUSHSPARSE_CASE(0););
+    EMBEDX_CASE(256, PUSHSPARSE_CASE(0););
     default:
       PADDLE_THROW(platform::errors::InvalidArgument(
           "Unsupport this embedding size [%d]", hidden_size - 3));
