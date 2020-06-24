@@ -21,7 +21,9 @@ limitations under the License. */
 #include "paddle/fluid/platform/cpu_helper.h"
 #include "paddle/fluid/platform/device_context.h"
 #include "paddle/fluid/platform/lodtensor_printer.h"
-
+#ifdef PADDLE_WITH_BOX_PS
+#include "paddle/fluid/framework/fleet/box_wrapper.h"
+#endif
 namespace paddle {
 namespace framework {
 
@@ -106,6 +108,21 @@ void SectionWorker::Initialize(const TrainerDesc& desc) {
 }
 
 void SectionWorker::AutoSetCPUAffinity(bool reuse) {
+#ifdef PADDLE_WITH_BOX_PS
+  std::vector<int> &train_cores = boxps::get_train_cores();
+  if (train_cores.empty()) {
+    LOG(WARNING) << "not found binding train cores";
+    return;
+  }
+
+  int cpuid = train_cores[pipeline_id_];
+  cpu_set_t mask;
+  CPU_ZERO(&mask);
+  CPU_SET(cpuid, &mask);
+  pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask);
+
+  //VLOG(0) << "binding card = " << pipeline_id_ << ", cpuid = " << cpuid;
+#else
   int thread_cpu_id = cpu_id_.fetch_add(1);
 
   unsigned concurrency_cap = std::thread::hardware_concurrency();
@@ -116,8 +133,8 @@ void SectionWorker::AutoSetCPUAffinity(bool reuse) {
       proc %= concurrency_cap;
     } else {
       LOG(INFO) << "All " << concurrency_cap
-                << " CPUs have been set affinities. Fail to set "
-                << thread_cpu_id << "th thread";
+          << " CPUs have been set affinities. Fail to set " << thread_cpu_id
+          << "th thread";
       return;
     }
   }
@@ -136,15 +153,14 @@ void SectionWorker::AutoSetCPUAffinity(bool reuse) {
       (0 == CPU_ISSET(proc, &mask))) {
     LOG(WARNING) << "Fail to set thread affinity to CPU " << proc;
   }
-  SEC_LOG << "Set " << thread_cpu_id << "th thread affinity to CPU " << proc;
+  VLOG(0) << "Set " << thread_cpu_id << "th thread affinity to CPU " << proc;
+#endif
 }
 
-void SectionWorker::TrainFiles() {
-  SEC_LOG << "begin section_worker TrainFiles";
+void SectionWorker::ReadFiles() {
+  VLOG(0) << "begin section_worker ReadFiles";
   AutoSetCPUAffinity(true);
 
-  int64_t step_cnt = 0;
-  int64_t accum_num = 0;
   int batch_size = 0;
   Scope* scope = nullptr;
   if (device_reader_ != nullptr) {
@@ -157,7 +173,7 @@ void SectionWorker::TrainFiles() {
       if (batch_size <= 0) {
         break;
       }
-      SEC_LOG << "read batch size: " << batch_size;
+      VLOG(0) << "read batch size: " << batch_size;
     } else {
       // TODO(hutuxian): Keep batch_size in scope? Or is there a better way to
       // fetch batch_size? Some variables may not have batch_size.
@@ -168,12 +184,30 @@ void SectionWorker::TrainFiles() {
           scope->FindVar(in_var_names_->at(0))->Get<LoDTensor>();
       batch_size =
           tensor.lod().size() ? tensor.lod()[0].size() - 1 : tensor.dims()[0];
-      SEC_LOG << "input batch size: " << batch_size;
+      VLOG(0) << "input batch size: " << batch_size;
     }
 
+    VLOG(0) << "send scope[" << scope << "] to calc_scope_queue_";
+    calc_scope_queue_->Send(scope);
+  }
+}
+
+void SectionWorker::TrainFiles() {
+  VLOG(0) << "begin section_worker TrainFiles";
+  AutoSetCPUAffinity(true);
+
+  int64_t step_cnt = 0;
+  int64_t accum_num = 0;
+  int batch_size = 0;
+  Scope* scope = nullptr;
+  if (device_reader_ != nullptr) {
+    device_reader_->Start();
+  }
+  while (calc_scope_queue_->Receive(&scope)) {
+    VLOG(0) << "recv scope[" << scope << "] from calc_scope_queue_";
     Scope* exe_scope = scope;
     if (section_id_ > 0 && platform::is_gpu_place(place_)) {
-      SEC_LOG << "CPU2GPU memory copy";
+      VLOG(0) << "CPU2GPU memory copy";
 
       if (scope->kids().empty()) {
         exe_scope = &scope->NewScope();
@@ -195,7 +229,7 @@ void SectionWorker::TrainFiles() {
       }
     }
 
-    SEC_LOG << "begin running ops";
+    VLOG(0) << "begin running ops";
 
     for (auto& op : ops_) {
       op->Run(*exe_scope, place_);
@@ -207,15 +241,17 @@ void SectionWorker::TrainFiles() {
     dev_ctx_->Wait();
 
 #ifdef PADDLE_WITH_BOX_PS
+    /*
     auto box_ptr = BoxWrapper::GetInstance();
     auto& metric_list = box_ptr->GetMetricList();
     for (auto iter = metric_list.begin(); iter != metric_list.end(); iter++) {
       auto* metric_msg = iter->second;
-      if (metric_msg->IsJoin() != box_ptr->PassFlag()) {
+      if (box_ptr->Phase() != metric_msg->MetricPhase()) {
         continue;
       }
       metric_msg->add_data(exe_scope);
     }
+    */
 #endif
     if (section_id_ != section_num_ - 1 && platform::is_gpu_place(place_)) {
       // FIXME: Temporarily we assume two adjacent sections are in different
@@ -227,7 +263,7 @@ void SectionWorker::TrainFiles() {
       // place of
       // joint-out variables, and do transform as required
 
-      SEC_LOG << "GPU2CPU memory copy";
+      VLOG(0) << "GPU2CPU memory copy";
 
       for (const std::string& name : *out_var_names_) {
         const LoDTensor& src_tensor =
@@ -262,8 +298,8 @@ void SectionWorker::TrainFiles() {
   }
 }
 
-void SectionWorker::TrainFilesWithProfiler() {
-  SEC_LOG << "begin section_worker TrainFiles with profiler";
+void SectionWorker::ReadFilesWithProfiler() {
+  VLOG(0) << "begin section_worker TrainFiles with profiler";
   AutoSetCPUAffinity(true);
 
   int64_t step_cnt = 0;
@@ -272,11 +308,9 @@ void SectionWorker::TrainFilesWithProfiler() {
   Scope* scope = nullptr;
 
   platform::Timer reader_timer;
-  platform::Timer cal_timer;
-  platform::Timer trans_timer;
-  platform::Timer sync_timer;
   platform::Timer main_timer;
   platform::Timer outer_timer;
+  platform::Timer send_timer;
 
   std::vector<double> op_total_time;
   std::vector<std::string> op_name;
@@ -308,7 +342,7 @@ void SectionWorker::TrainFilesWithProfiler() {
       if (batch_size <= 0) {
         break;
       }
-      SEC_LOG << "read batch size: " << batch_size;
+      VLOG(0) << "read batch size: " << batch_size;
     } else {
       PADDLE_ENFORCE(
           in_var_names_->size(),
@@ -317,12 +351,68 @@ void SectionWorker::TrainFilesWithProfiler() {
           scope->FindVar(in_var_names_->at(0))->Get<LoDTensor>();
       batch_size =
           tensor.lod().size() ? tensor.lod()[0].size() - 1 : tensor.dims()[0];
-      SEC_LOG << "input batch size: " << batch_size;
+      VLOG(0) << "input batch size: " << batch_size;
     }
+
+    send_timer.Resume();
+    calc_scope_queue_->Send(scope);
+    send_timer.Pause();
+
+    main_timer.Pause();
+  }
+
+  LOG(ERROR) << "log_for_profile"
+             << " card:" << pipeline_id_ << " thread:" << thread_id_
+             << " section:" << section_id_ << " step_count:" << step_cnt
+             << " batch_count:" << accum_num
+             << " read_time:" << reader_timer.ElapsedUS()
+             << " main_time:" << main_timer.ElapsedUS()
+             << " outer_time:" << outer_timer.ElapsedUS();
+}
+
+void SectionWorker::TrainFilesWithProfiler() {
+  VLOG(0) << "begin section_worker TrainFiles with profiler";
+  AutoSetCPUAffinity(true);
+
+  int64_t step_cnt = 0;
+  int64_t accum_num = 0;
+  int batch_size = 0;
+  Scope* scope = nullptr;
+
+  platform::Timer cal_timer;
+  platform::Timer trans_timer;
+  platform::Timer sync_timer;
+  platform::Timer main_timer;
+  platform::Timer outer_timer;
+  platform::Timer metric_timer;
+  platform::Timer dump_timer;
+  platform::Timer send_timer;
+
+  std::vector<double> op_total_time;
+  std::vector<std::string> op_name;
+  for (auto& op : ops_) {
+    op_name.push_back(op->Type());
+  }
+  op_total_time.resize(ops_.size());
+  for (size_t i = 0; i < op_total_time.size(); ++i) {
+    op_total_time[i] = 0.0;
+  }
+  platform::Timer timeline;
+  if (device_reader_ != nullptr) {
+    device_reader_->Start();
+  }
+
+  bool started = false;
+  while (calc_scope_queue_->Receive(&scope)) {
+    if (UNLIKELY(!started)) {
+      outer_timer.Start();
+      started = true;
+    }
+    main_timer.Resume();
 
     Scope* exe_scope = scope;
     if (section_id_ > 0 && platform::is_gpu_place(place_)) {
-      SEC_LOG << "CPU2GPU memory copy";
+      VLOG(0) << "CPU2GPU memory copy";
       trans_timer.Resume();
       if (scope->kids().empty()) {
         exe_scope = &scope->NewScope();
@@ -345,7 +435,7 @@ void SectionWorker::TrainFilesWithProfiler() {
       trans_timer.Pause();
     }
 
-    SEC_LOG << "begin running ops";
+    VLOG(0) << "begin running ops";
     cal_timer.Resume();
     int op_id = 0;
     dev_ctx_->Wait();
@@ -363,22 +453,28 @@ void SectionWorker::TrainFilesWithProfiler() {
     dev_ctx_->Wait();
     cal_timer.Pause();
 #ifdef PADDLE_WITH_BOX_PS
+    metric_timer.Resume();
+    /*
     auto box_ptr = BoxWrapper::GetInstance();
     auto& metric_list = box_ptr->GetMetricList();
     for (auto iter = metric_list.begin(); iter != metric_list.end(); iter++) {
       auto* metric_msg = iter->second;
-      if (metric_msg->IsJoin() != box_ptr->PassFlag()) {
+      if (box_ptr->Phase() != metric_msg->MetricPhase()) {
         continue;
       }
       metric_msg->add_data(exe_scope);
     }
+    */
+    metric_timer.Pause();
 #endif
+    dump_timer.Resume();
     if (need_dump_field_) {
       DumpField(*scope, dump_mode_, dump_interval_);
     }
     if (need_dump_param_ && pipeline_id_ == 0) {
       DumpParam(*scope, step_cnt);
     }
+    dump_timer.Pause();
 
     if (section_id_ != section_num_ - 1 && platform::is_gpu_place(place_)) {
       // FIXME: Temporarily we assume two adjacent sections are in different
@@ -390,7 +486,7 @@ void SectionWorker::TrainFilesWithProfiler() {
       // place of
       // joint-out variables, and do transform as required
 
-      SEC_LOG << "GPU2CPU memory copy";
+      VLOG(0) << "GPU2CPU memory copy";
       trans_timer.Resume();
       for (const std::string& name : *out_var_names_) {
         const LoDTensor& src_tensor =
@@ -404,7 +500,9 @@ void SectionWorker::TrainFilesWithProfiler() {
       trans_timer.Pause();
     }
 
+    send_timer.Resume();
     out_scope_queue_->Send(scope);
+    send_timer.Pause();
 
     if (sync_func_) {
       sync_timer.Resume();
@@ -435,9 +533,11 @@ void SectionWorker::TrainFilesWithProfiler() {
              << " card:" << pipeline_id_ << " thread:" << thread_id_
              << " section:" << section_id_ << " step_count:" << step_cnt
              << " batch_count:" << accum_num
-             << " read_time:" << reader_timer.ElapsedUS()
              << " trans_time:" << trans_timer.ElapsedUS()
              << " cal_time:" << cal_timer.ElapsedUS()
+             << " metric_time:" << metric_timer.ElapsedUS()
+             << " dump_time:" << dump_timer.ElapsedUS()
+             << " send_time:" << send_timer.ElapsedUS()
              << " sync_time:" << sync_timer.ElapsedUS()
              << " main_time:" << main_timer.ElapsedUS()
              << " outer_time:" << outer_timer.ElapsedUS();
@@ -446,6 +546,7 @@ void SectionWorker::TrainFilesWithProfiler() {
                << ", mean time: " << op_total_time[i] / accum_num;
   }
 }
+
 }  // namespace framework
 }  // namespace paddle
 #endif

@@ -17,7 +17,6 @@ import paddle.fluid.core as core
 import os
 import unittest
 import paddle.fluid.layers as layers
-from paddle.fluid.layers.nn import _pull_box_sparse
 
 
 class TestDataFeed(unittest.TestCase):
@@ -44,9 +43,6 @@ class TestDataFeed(unittest.TestCase):
     def test_pboxdatafeed(self):
         self.run_dataset(False)
 
-    def test_pboxdatafeed(self):
-        self.run_dataset(True)
-
     def run_dataset(self, is_cpu):
         x = fluid.layers.data(name='x', shape=[1], dtype='int64', lod_level=0)
         y = fluid.layers.data(name='y', shape=[1], dtype='int64', lod_level=0)
@@ -57,17 +53,18 @@ class TestDataFeed(unittest.TestCase):
             lod_level=0,
             append_batch_size=False)
 
-        emb_x, emb_y = _pull_box_sparse([x, y], size=2)
-        emb_xp = _pull_box_sparse(x, size=2)
-        concat = layers.concat([emb_x, emb_y], axis=1)
+        emb_x, emb_y = fluid.contrib.layers._pull_box_extended_sparse(
+            [x, y], size=2, extend_size=128)
+        concat = layers.concat([emb_x[0], emb_x[1], emb_y[0], emb_y[1]], axis=1)
         fc = layers.fc(input=concat,
                        name="fc",
                        size=1,
                        num_flatten_dims=1,
                        bias_attr=False)
         loss = layers.reduce_mean(fc)
-        place = fluid.CPUPlace() if is_cpu or not core.is_compiled_with_cuda(
-        ) else fluid.CUDAPlace(0)
+        if not core.is_compiled_with_cuda():
+            return
+        place = fluid.CUDAPlace(0)
         exe = fluid.Executor(place)
 
         with open("test_run_with_dump_a.txt", "w") as f:

@@ -38,9 +38,9 @@ void PipelineTrainer::Initialize(const TrainerDesc& trainer_desc,
   sync_steps_ = pipeline_config_.sync_steps();
   section_num_ = pipeline_config_.section_config_size();
 
-  VLOG(3) << "scope_queue_size: " << scope_queue_size_;
-  VLOG(3) << "section num: " << section_num_;
-  VLOG(3) << "sync_steps: " << sync_steps_;
+  VLOG(0) << "scope_queue_size: " << scope_queue_size_;
+  VLOG(0) << "section num: " << section_num_;
+  VLOG(0) << "sync_steps: " << sync_steps_;
 
   workers_.resize(section_num_);
   in_var_names_.resize(section_num_);
@@ -202,6 +202,7 @@ void PipelineTrainer::InitTrainerEnv(const ProgramDesc& main_program,
   PADDLE_ENFORCE(root_scope_, "Null root_scope pointer");
   SectionWorker::cpu_id_.store(pipeline_config_.start_cpu_core_id());
   scope_queues_.resize(section_num_);
+  // calc_scope_queues_.resize(section_num_);
   pipeline_scopes_.resize(pipeline_num_);
   for (auto& var : main_program.Block(0).AllVars()) {
     if (var->Persistable()) {
@@ -213,6 +214,7 @@ void PipelineTrainer::InitTrainerEnv(const ProgramDesc& main_program,
   for (int i = 0; i < section_num_; ++i) {
     for (int j = 0; j < pipeline_num_; ++j) {
       scope_queues_[i].emplace_back(new ScopeQueue(scope_queue_size_));
+      // calc_scope_queues_[i].emplace_back(new ScopeQueue(scope_queue_size_));
       if (i == 0) {
         pipeline_scopes_[j] = &root_scope_->NewScope();
         CopyParameters(*root_scope_, j);
@@ -231,7 +233,15 @@ void PipelineTrainer::InitTrainerEnv(const ProgramDesc& main_program,
         this_worker->SetRootScope(root_scope_);
         this_worker->SetCountMutex(worker_count_mutex_[i][j].get());
         this_worker->SetWorkerCount(worker_count_[i][j]);
+        VLOG(0) << "scope_queues_[" << i << "][" << j << "] 0";
+        if (i == section_num_ - 1) {
+            VLOG(0) << "scope_queues_[" << 0 << "][" << j << "] 1";
+        } else {
+            VLOG(0) << "scope_queues_[" << i + 1 << "][" << j << "] 2";
+        }
         this_worker->SetScopeQueue(scope_queues_[i][j].get(),
+                                   scope_queues_[i][j].get(),
+                                   // calc_scope_queues_[i][j].get(),
                                    (i == section_num_ - 1)
                                        ? scope_queues_[0][j].get()
                                        : scope_queues_[i + 1][j].get());
@@ -291,9 +301,13 @@ void PipelineTrainer::Run() {
     for (int j = 0; j < pipeline_num_; ++j) {
       for (size_t k = 0; k < workers_[i][j].size(); ++k) {
         if (!debug_) {
+          read_threads_.push_back(
+              std::thread(&DeviceWorker::ReadFiles, workers_[i][j][k].get()));
           section_threads_.push_back(
               std::thread(&DeviceWorker::TrainFiles, workers_[i][j][k].get()));
         } else {
+          read_threads_.push_back(std::thread(
+              &DeviceWorker::ReadFilesWithProfiler, workers_[i][j][k].get()));
           section_threads_.push_back(std::thread(
               &DeviceWorker::TrainFilesWithProfiler, workers_[i][j][k].get()));
         }
@@ -303,6 +317,9 @@ void PipelineTrainer::Run() {
 }
 
 void PipelineTrainer::Finalize() {
+  for (auto& th : read_threads_) {
+    th.join();
+  }
   for (auto& th : section_threads_) {
     th.join();
   }

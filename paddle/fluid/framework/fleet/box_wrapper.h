@@ -13,9 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #pragma once
-
 #ifdef PADDLE_WITH_BOX_PS
-#include <afs_filesystem.h>
+#include <boxps_extends.h>
 #include <boxps_public.h>
 #include <dirent.h>
 #include <signal.h>
@@ -31,21 +30,23 @@ limitations under the License. */
 #include <map>
 #include <memory>
 #include <mutex>  // NOLINT
+#include <set>
 #include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include "paddle/fluid/framework/data_feed.h"
 #include "paddle/fluid/framework/data_set.h"
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/platform/gpu_info.h"
+#include "paddle/fluid/platform/monitor.h"
 #include "paddle/fluid/platform/place.h"
 #include "paddle/fluid/platform/timer.h"
 #include "paddle/fluid/string/string_helper.h"
 #define BUF_SIZE 1024 * 1024
 
-extern void comlog_set_log_level(int log_level);
-extern int com_logstatus();
+DECLARE_int32(fix_dayid);
 namespace paddle {
 namespace framework {
 
@@ -100,6 +101,8 @@ class BasicAucCalculator {
   double& local_abserr() { return _local_abserr; }
   double& local_sqrerr() { return _local_sqrerr; }
   double& local_pred() { return _local_pred; }
+
+ private:
   void calculate_bucket_error();
 
  protected:
@@ -129,209 +132,26 @@ class BasicAucCalculator {
   std::mutex _table_mutex;
 };
 
-class AfsStreamFile {
- public:
-  explicit AfsStreamFile(afs::AfsFileSystem* afsfile)
-      : afsfile_(afsfile), reader_(nullptr) {}
-  virtual ~AfsStreamFile() {
-    if (reader_ != NULL) {
-      afsfile_->CloseReader(reader_);
-      reader_ = NULL;
-    }
-  }
-  virtual int Open(const char* path) {
-    if (path == NULL) {
-      return -1;
-    }
-    reader_ = afsfile_->OpenReader(path);
-    PADDLE_ENFORCE_NE(reader_, nullptr,
-                      platform::errors::PreconditionNotMet(
-                          "OpenReader for file[%s] failed.", path));
-    return 0;
-  }
-  virtual int Read(char* buf, int len) {
-    int ret = reader_->Read(buf, len);
-    return ret;
-  }
-
- private:
-  afs::AfsFileSystem* afsfile_;
-  afs::Reader* reader_;
-};
-
-class AfsManager {
- public:
-  AfsManager(const std::string& fs_name, const std::string& fs_ugi,
-             const std::string& conf_path) {
-    auto split = fs_ugi.find(",");
-    std::string user = fs_ugi.substr(0, split);
-    std::string pwd = fs_ugi.substr(split + 1);
-    _afshandler = new afs::AfsFileSystem(fs_name.c_str(), user.c_str(),
-                                         pwd.c_str(), conf_path.c_str());
-    VLOG(0) << "AFSAPI Init: user: " << user << ", pwd: " << pwd;
-    int ret = _afshandler->Init(true, (com_logstatus() == 0));
-    PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
-                                  "Called AFSAPI Init Interface Failed."));
-    // Too high level will hurt the performance
-    comlog_set_log_level(4);
-    ret = _afshandler->Connect();
-    PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
-                                  "Called AFSAPI Connect Interface Failed"));
-  }
-  virtual ~AfsManager() {
-    if (_afshandler != NULL) {
-      _afshandler->DisConnect();
-      _afshandler->Destroy();
-      delete _afshandler;
-      _afshandler = nullptr;
-    }
-  }
-  static void ReadFromAfs(const std::string& path, FILE* wfp,
-                          afs::AfsFileSystem* _afshandler) {
-    AfsStreamFile* read_stream = new AfsStreamFile(_afshandler);
-    int ret = read_stream->Open(path.c_str());
-    PADDLE_ENFORCE_EQ(ret, 0,
-                      platform::errors::PreconditionNotMet(
-                          "Called AFSAPI Open file %s Failed.", path.c_str()));
-    char* _buff = static_cast<char*>(calloc(BUF_SIZE + 2, sizeof(char)));
-    int size = 0;
-    while ((size = read_stream->Read(_buff, BUF_SIZE)) > 0) {
-      fwrite(_buff, 1, size, wfp);
-    }
-    fflush(wfp);
-    fclose(wfp);
-    delete _buff;
-    delete read_stream;
-  }
-  int PopenBidirectionalInternal(const char* command,
-                                 FILE*& fp_read,               // NOLINT
-                                 FILE*& fp_write, pid_t& pid,  // NOLINT
-                                 bool read,                    // NOLINT
-                                 bool write) {
-    std::lock_guard<std::mutex> g(g_flock);
-    int fd_read[2];
-    int fd_write[2];
-    if (read) {
-      if (pipe(fd_read) != 0) {
-        LOG(FATAL) << "create read pipe failed";
-        return -1;
-      }
-    }
-    if (write) {
-      if (pipe(fd_write) != 0) {
-        LOG(FATAL) << "create write pipe failed";
-        return -1;
-      }
-    }
-    pid = vfork();
-    if (pid < 0) {
-      LOG(FATAL) << "fork failed";
-      return -1;
-    }
-    if (pid == 0) {
-      if (read) {
-        if (-1 == dup2(fd_read[1], STDOUT_FILENO)) {
-          LOG(FATAL) << "dup2 failed";
-        }
-        close(fd_read[1]);
-        close(fd_read[0]);
-      }
-
-      if (write) {
-        if (-1 == dup2(fd_write[0], STDIN_FILENO)) {
-          LOG(FATAL) << "dup2 failed";
-        }
-        close(fd_write[0]);
-        close(fd_write[1]);
-      }
-
-      struct dirent* item;
-      DIR* dir = opendir("/proc/self/fd");
-      while ((item = readdir(dir)) != NULL) {
-        int fd = atoi(item->d_name);
-        if (fd >= 3) {
-          (void)close(fd);
-        }
-      }
-
-      closedir(dir);
-
-      execl("/bin/sh", "sh", "-c", command, NULL);
-      exit(127);
-    } else {
-      if (read) {
-        close(fd_read[1]);
-        fcntl(fd_read[0], F_SETFD, FD_CLOEXEC);
-        fp_read = fdopen(fd_read[0], "r");
-        if (0 == fp_read) {
-          LOG(FATAL) << "fdopen failed.";
-          return -1;
-        }
-      }
-
-      if (write) {
-        close(fd_write[0]);
-        fcntl(fd_write[1], F_SETFD, FD_CLOEXEC);
-        fp_write = fdopen(fd_write[1], "w");
-        if (0 == fp_write) {
-          LOG(FATAL) << "fdopen failed.";
-          return -1;
-        }
-      }
-      return 0;
-    }
-  }
-  std::shared_ptr<FILE> GetFile(const std::string& path,
-                                const std::string& pipe_command) {
-    pid_t pid = 0;
-    FILE* wfp = NULL;
-    FILE* rfp = NULL;
-
-    // Always use set -eo pipefail. Fail fast and be aware of exit codes.
-    std::string cmd = "set -eo pipefail; " + pipe_command;
-    int ret =
-        PopenBidirectionalInternal(cmd.c_str(), rfp, wfp, pid, true, true);
-
-    PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
-                                  "Called PopenBidirectionalInternal Failed"));
-    std::string filename(path);
-    if (strncmp(filename.c_str(), "afs:", 4) == 0) {
-      filename = filename.substr(4);
-    }
-    std::thread read_thread(&AfsManager::ReadFromAfs, filename, wfp,
-                            _afshandler);
-    read_thread.detach();
-    return {rfp, [pid, cmd](FILE* rfp) {
-              int wstatus = -1;
-              int ret = -1;
-              do {
-                ret = waitpid(pid, &wstatus, 0);
-              } while (ret == -1 && errno == EINTR);
-
-              fclose(rfp);
-              if (wstatus == 0 || wstatus == (128 + SIGPIPE) * 256 ||
-                  (wstatus == -1 && errno == ECHILD)) {
-                VLOG(3) << "pclose_bidirectional pid[" << pid << "], status["
-                        << wstatus << "]";
-              } else {
-                LOG(WARNING) << "pclose_bidirectional pid[" << pid << "]"
-                             << ", ret[" << ret << "] shell open fail";
-              }
-              if (wstatus == -1 && errno == ECHILD) {
-                LOG(WARNING) << "errno is ECHILD";
-              }
-            }};
-  }
-
- private:
-  afs::AfsFileSystem* _afshandler;
-  std::mutex g_flock;
-};
-
 class BoxWrapper {
  public:
-  virtual ~BoxWrapper() {}
-  BoxWrapper() {}
+  virtual ~BoxWrapper() {
+    if (file_manager_ != nullptr) {
+      file_manager_->destory();
+      file_manager_ = nullptr;
+    }
+    if (data_shuffle_ != nullptr) {
+      data_shuffle_->destory();
+      data_shuffle_ = nullptr;
+    }
+    if (p_agent_ != nullptr) {
+      delete p_agent_;
+      p_agent_ = nullptr;
+    }
+  }
+  BoxWrapper() {
+    fprintf(stdout, "init box wrapper\n");
+    boxps::MPICluster::Ins();
+  }
 
   void FeedPass(int date, const std::vector<uint64_t>& feasgin_to_box) const;
   void BeginFeedPass(int date, boxps::PSAgentBase** agent) const;
@@ -339,30 +159,54 @@ class BoxWrapper {
   void BeginPass() const;
   void EndPass(bool need_save_delta) const;
   void SetTestMode(bool is_test) const;
+
+  template <size_t EMBEDX_DIM, size_t EXPAND_EMBED_DIM = 0>
+  void PullSparseCase(const paddle::platform::Place& place,
+                      const std::vector<const uint64_t*>& keys,
+                      const std::vector<float*>& values,
+                      const std::vector<int64_t>& slot_lengths,
+                      const int hidden_size, const int expand_embed_dim);
+
   void PullSparse(const paddle::platform::Place& place,
                   const std::vector<const uint64_t*>& keys,
                   const std::vector<float*>& values,
                   const std::vector<int64_t>& slot_lengths,
-                  const int hidden_size);
+                  const int hidden_size, const int expand_embed_dim);
+
+  template <size_t EMBEDX_DIM, size_t EXPAND_EMBED_DIM = 0>
+  void PushSparseGradCase(const paddle::platform::Place& place,
+                          const std::vector<const uint64_t*>& keys,
+                          const std::vector<const float*>& grad_values,
+                          const std::vector<int64_t>& slot_lengths,
+                          const int hidden_size, const int expand_embed_dim,
+                          const int batch_size);
+
   void PushSparseGrad(const paddle::platform::Place& place,
                       const std::vector<const uint64_t*>& keys,
                       const std::vector<const float*>& grad_values,
                       const std::vector<int64_t>& slot_lengths,
-                      const int hidden_size, const int batch_size);
+                      const int hidden_size, const int expand_embed_dim,
+                      const int batch_size);
+
   void CopyForPull(const paddle::platform::Place& place, uint64_t** gpu_keys,
-                   const std::vector<float*>& values,
-                   const boxps::FeatureValueGpu* total_values_gpu,
+                   const std::vector<float*>& values, void* total_values_gpu,
                    const int64_t* gpu_len, const int slot_num,
-                   const int hidden_size, const int64_t total_length);
+                   const int hidden_size, const int expand_embed_dim,
+                   const int64_t total_length);
+
   void CopyForPush(const paddle::platform::Place& place,
                    const std::vector<const float*>& grad_values,
-                   boxps::FeaturePushValueGpu* total_grad_values_gpu,
+                   void* total_grad_values_gpu,
                    const std::vector<int64_t>& slot_lengths,
-                   const int hidden_size, const int64_t total_length,
-                   const int batch_size);
+                   const int hidden_size, const int expand_embed_dim,
+                   const int64_t total_length, const int batch_size);
+
   void CopyKeys(const paddle::platform::Place& place, uint64_t** origin_keys,
                 uint64_t* total_keys, const int64_t* gpu_len, int slot_num,
                 int total_len);
+
+  void CheckEmbedSizeIsValid(int embedx_dim, int expand_embed_dim);
+
   boxps::PSAgentBase* GetAgent() { return p_agent_; }
   void InitializeGPUAndLoadModel(
       const char* conf_file, const std::vector<int>& slot_vector,
@@ -403,6 +247,19 @@ class BoxWrapper {
     }
   }
 
+  void ReleasePool(void) {
+    // after one day train release memory pool slot record
+    platform::Timer timer;
+    timer.Start();
+    size_t capacity = SlotRecordPool().capacity();
+    SlotRecordPool().clear();
+    timer.Pause();
+    STAT_RESET(STAT_total_feasign_num_in_mem, 0);
+    STAT_RESET(STAT_slot_pool_size, 0);
+    LOG(WARNING) << "ReleasePool Size=" << capacity
+                 << ", Time=" << timer.ElapsedSec() << "sec";
+  }
+
   const std::string SaveBase(const char* batch_model_path,
                              const char* xbox_model_path,
                              const std::string& date) {
@@ -419,7 +276,8 @@ class BoxWrapper {
     b.tm_year = year - 1900;
     b.tm_mon = month - 1;
     b.tm_mday = day;
-    b.tm_min = b.tm_hour = b.tm_sec = 0;
+    b.tm_hour = FLAGS_fix_dayid ? 8 : 0;
+    b.tm_min = b.tm_sec = 0;
     std::time_t seconds_from_1970 = std::mktime(&b);
 
     std::string ret_str;
@@ -440,6 +298,15 @@ class BoxWrapper {
   }
 
   static std::shared_ptr<BoxWrapper> GetInstance() {
+    PADDLE_ENFORCE_EQ(
+        s_instance_ == nullptr, false,
+        platform::errors::PreconditionNotMet(
+            "GetInstance failed in BoxPs, you should use SetInstance firstly"));
+    return s_instance_;
+  }
+
+  static std::shared_ptr<BoxWrapper> SetInstance(int embedx_dim = 8,
+                                                 int expand_embed_dim = 0) {
     if (nullptr == s_instance_) {
       // If main thread is guaranteed to init this, this lock can be removed
       static std::mutex mutex;
@@ -447,19 +314,59 @@ class BoxWrapper {
       if (nullptr == s_instance_) {
         VLOG(3) << "s_instance_ is null";
         s_instance_.reset(new paddle::framework::BoxWrapper());
-        s_instance_->boxps_ptr_.reset(boxps::BoxPSBase::GetIns());
+        s_instance_->boxps_ptr_.reset(
+            boxps::BoxPSBase::GetIns(embedx_dim, expand_embed_dim));
+        embedx_dim_ = embedx_dim;
+        expand_embed_dim_ = expand_embed_dim;
+
+        if (boxps::MPICluster::Ins().size() > 1) {
+          data_shuffle_.reset(boxps::PaddleShuffler::New());
+          data_shuffle_->init(10);
+        }
       }
+    } else {
+      LOG(WARNING) << "You have already used SetInstance() before";
     }
     return s_instance_;
   }
 
   void InitAfsAPI(const std::string& fs_name, const std::string& fs_ugi,
                   const std::string& conf_path) {
-    afs_manager = new AfsManager(fs_name, fs_ugi, conf_path);
+    file_manager_.reset(boxps::PaddleFileMgr::New());
+    auto split = fs_ugi.find(",");
+    std::string user = fs_ugi.substr(0, split);
+    std::string pwd = fs_ugi.substr(split + 1);
+    bool ret = file_manager_->initialize(fs_name, user, pwd, conf_path);
+    PADDLE_ENFORCE_EQ(ret, true, platform::errors::PreconditionNotMet(
+                                     "Called AFSAPI Init Interface Failed."));
     use_afs_api_ = true;
   }
 
   bool UseAfsApi() const { return use_afs_api_; }
+
+  std::shared_ptr<FILE> OpenReadFile(const std::string& path,
+                                     const std::string& pipe_command) {
+    return boxps::fopen_read(file_manager_.get(), path, pipe_command);
+  }
+
+  boxps::PaddleFileMgr* GetFileMgr(void) { return file_manager_.get(); }
+
+  // this performs better than rand_r, especially large data
+  static std::default_random_engine& LocalRandomEngine() {
+    struct engine_wrapper_t {
+      std::default_random_engine engine;
+      engine_wrapper_t() {
+        struct timespec tp;
+        clock_gettime(CLOCK_REALTIME, &tp);
+        double cur_time = tp.tv_sec + tp.tv_nsec * 1e-9;
+        static std::atomic<uint64_t> x(0);
+        std::seed_seq sseq = {x++, x++, x++, (uint64_t)(cur_time * 1000)};
+        engine.seed(sseq);
+      }
+    };
+    thread_local engine_wrapper_t r;
+    return r.engine;
+  }
 
   const std::unordered_set<std::string>& GetOmitedSlot() const {
     return slot_name_omited_in_feedpass_;
@@ -469,16 +376,16 @@ class BoxWrapper {
    public:
     MetricMsg() {}
     MetricMsg(const std::string& label_varname, const std::string& pred_varname,
-              int is_join, int bucket_size = 1000000)
+              int metric_phase, int bucket_size = 1000000)
         : label_varname_(label_varname),
           pred_varname_(pred_varname),
-          is_join_(is_join) {
+          metric_phase_(metric_phase) {
       calculator = new BasicAucCalculator();
       calculator->init(bucket_size);
     }
     virtual ~MetricMsg() {}
 
-    int IsJoin() const { return is_join_; }
+    int MetricPhase() const { return metric_phase_; }
     BasicAucCalculator* GetCalculator() { return calculator; }
     virtual void add_data(const Scope* exe_scope) {
       std::vector<int64_t> label_data;
@@ -514,20 +421,20 @@ class BoxWrapper {
    protected:
     std::string label_varname_;
     std::string pred_varname_;
-    int is_join_;
+    int metric_phase_;
     BasicAucCalculator* calculator;
   };
 
   class MultiTaskMetricMsg : public MetricMsg {
    public:
     MultiTaskMetricMsg(const std::string& label_varname,
-                       const std::string& pred_varname_list, int is_join,
+                       const std::string& pred_varname_list, int metric_phase,
                        const std::string& cmatch_rank_group,
                        const std::string& cmatch_rank_varname,
                        int bucket_size = 1000000) {
       label_varname_ = label_varname;
       cmatch_rank_varname_ = cmatch_rank_varname;
-      is_join_ = is_join;
+      metric_phase_ = metric_phase;
       calculator = new BasicAucCalculator();
       calculator->init(bucket_size);
       for (auto& cmatch_rank : string::split_string(cmatch_rank_group)) {
@@ -594,17 +501,22 @@ class BoxWrapper {
   class CmatchRankMetricMsg : public MetricMsg {
    public:
     CmatchRankMetricMsg(const std::string& label_varname,
-                        const std::string& pred_varname, int is_join,
+                        const std::string& pred_varname, int metric_phase,
                         const std::string& cmatch_rank_group,
                         const std::string& cmatch_rank_varname,
-                        int bucket_size = 1000000) {
+                        bool ignore_rank = false, int bucket_size = 1000000) {
       label_varname_ = label_varname;
       pred_varname_ = pred_varname;
       cmatch_rank_varname_ = cmatch_rank_varname;
-      is_join_ = is_join;
+      metric_phase_ = metric_phase;
+      ignore_rank_ = ignore_rank;
       calculator = new BasicAucCalculator();
       calculator->init(bucket_size);
       for (auto& cmatch_rank : string::split_string(cmatch_rank_group)) {
+        if (ignore_rank) {  // CmatchAUC
+          cmatch_rank_v.emplace_back(atoi(cmatch_rank.c_str()), 0);
+          continue;
+        }
         const std::vector<std::string>& cur_cmatch_rank =
             string::split_string(cmatch_rank, "_");
         PADDLE_ENFORCE_EQ(
@@ -638,7 +550,13 @@ class BoxWrapper {
       for (size_t i = 0; i < batch_size; ++i) {
         const auto& cur_cmatch_rank = parse_cmatch_rank(cmatch_rank_data[i]);
         for (size_t j = 0; j < cmatch_rank_v.size(); ++j) {
-          if (cmatch_rank_v[j] == cur_cmatch_rank) {
+          bool is_matched = false;
+          if (ignore_rank_) {
+            is_matched = cmatch_rank_v[j].first == cur_cmatch_rank.first;
+          } else {
+            is_matched = cmatch_rank_v[j] == cur_cmatch_rank;
+          }
+          if (is_matched) {
             cal->add_data(pred_data[i], label_data[i]);
             break;
           }
@@ -649,16 +567,17 @@ class BoxWrapper {
    protected:
     std::vector<std::pair<int, int>> cmatch_rank_v;
     std::string cmatch_rank_varname_;
+    bool ignore_rank_;
   };
   class MaskMetricMsg : public MetricMsg {
    public:
     MaskMetricMsg(const std::string& label_varname,
-                  const std::string& pred_varname, int is_join,
+                  const std::string& pred_varname, int metric_phase,
                   const std::string& mask_varname, int bucket_size = 1000000) {
       label_varname_ = label_varname;
       pred_varname_ = pred_varname;
       mask_varname_ = mask_varname;
-      is_join_ = is_join;
+      metric_phase_ = metric_phase;
       calculator = new BasicAucCalculator();
       calculator->init(bucket_size);
     }
@@ -682,36 +601,59 @@ class BoxWrapper {
    protected:
     std::string mask_varname_;
   };
-  const std::vector<std::string>& GetMetricNameList() const {
-    return metric_name_list_;
+  const std::vector<std::string> GetMetricNameList(
+      int metric_phase = -1) const {
+    VLOG(0) << "Want to Get metric phase: " << metric_phase;
+    if (metric_phase == -1) {
+      return metric_name_list_;
+    } else {
+      std::vector<std::string> ret;
+      for (const auto& name : metric_name_list_) {
+        const auto iter = metric_lists_.find(name);
+        PADDLE_ENFORCE_NE(
+            iter, metric_lists_.end(),
+            platform::errors::InvalidArgument(
+                "The metric name you provided is not registered."));
+
+        if (iter->second->MetricPhase() == metric_phase) {
+          VLOG(0) << name << "'s phase is " << iter->second->MetricPhase()
+                  << ", we want";
+          ret.push_back(name);
+        } else {
+          VLOG(0) << name << "'s phase is " << iter->second->MetricPhase()
+                  << ", not we want";
+        }
+      }
+      return ret;
+    }
   }
-  int PassFlag() const { return pass_flag_; }
-  void FlipPassFlag() { pass_flag_ = 1 - pass_flag_; }
+  int Phase() const { return phase_; }
+  void FlipPhase() { phase_ = (phase_ + 1) % phase_num_; }
   std::map<std::string, MetricMsg*>& GetMetricList() { return metric_lists_; }
 
   void InitMetric(const std::string& method, const std::string& name,
                   const std::string& label_varname,
                   const std::string& pred_varname,
                   const std::string& cmatch_rank_varname,
-                  const std::string& mask_varname, bool is_join,
-                  const std::string& cmatch_rank_group,
+                  const std::string& mask_varname, int metric_phase,
+                  const std::string& cmatch_rank_group, bool ignore_rank,
                   int bucket_size = 1000000) {
     if (method == "AucCalculator") {
       metric_lists_.emplace(name, new MetricMsg(label_varname, pred_varname,
-                                                is_join ? 1 : 0, bucket_size));
+                                                metric_phase, bucket_size));
     } else if (method == "MultiTaskAucCalculator") {
       metric_lists_.emplace(
           name, new MultiTaskMetricMsg(label_varname, pred_varname,
-                                       is_join ? 1 : 0, cmatch_rank_group,
+                                       metric_phase, cmatch_rank_group,
                                        cmatch_rank_varname, bucket_size));
     } else if (method == "CmatchRankAucCalculator") {
-      metric_lists_.emplace(
-          name, new CmatchRankMetricMsg(label_varname, pred_varname,
-                                        is_join ? 1 : 0, cmatch_rank_group,
-                                        cmatch_rank_varname, bucket_size));
+      metric_lists_.emplace(name, new CmatchRankMetricMsg(
+                                      label_varname, pred_varname, metric_phase,
+                                      cmatch_rank_group, cmatch_rank_varname,
+                                      ignore_rank, bucket_size));
     } else if (method == "MaskAucCalculator") {
       metric_lists_.emplace(
-          name, new MaskMetricMsg(label_varname, pred_varname, is_join ? 1 : 0,
+          name, new MaskMetricMsg(label_varname, pred_varname, metric_phase,
                                   mask_varname, bucket_size));
     } else {
       PADDLE_THROW(platform::errors::Unimplemented(
@@ -728,7 +670,6 @@ class BoxWrapper {
                           "The metric name you provided is not registered."));
     std::vector<float> metric_return_values_(8, 0.0);
     auto* auc_cal_ = iter->second->GetCalculator();
-    auc_cal_->calculate_bucket_error();
     auc_cal_->compute();
     metric_return_values_[0] = auc_cal_->auc();
     metric_return_values_[1] = auc_cal_->bucket_error();
@@ -745,23 +686,80 @@ class BoxWrapper {
 
  private:
   static cudaStream_t stream_list_[8];
-  static std::shared_ptr<boxps::BoxPSBase> boxps_ptr_;
+  std::shared_ptr<boxps::BoxPSBase> boxps_ptr_ = nullptr;
   boxps::PSAgentBase* p_agent_ = nullptr;
   // TODO(hutuxian): magic number, will add a config to specify
   const int feedpass_thread_num_ = 30;  // magic number
   static std::shared_ptr<BoxWrapper> s_instance_;
   std::unordered_set<std::string> slot_name_omited_in_feedpass_;
+  // EMBEDX_DIM and EXPAND_EMBED_DIM
+  static int embedx_dim_;
+  static int expand_embed_dim_;
 
   // Metric Related
-  int pass_flag_ = 1;  // join: 1, update: 0
+  int phase_ = 1;
+  int phase_num_ = 2;
   std::map<std::string, MetricMsg*> metric_lists_;
   std::vector<std::string> metric_name_list_;
   std::vector<int> slot_vector_;
   std::vector<LoDTensor> keys_tensor;  // Cache for pull_sparse
   bool use_afs_api_ = false;
 
+  std::shared_ptr<boxps::PaddleFileMgr> file_manager_ = nullptr;
+
  public:
-  static AfsManager* afs_manager;
+  static std::shared_ptr<boxps::PaddleShuffler> data_shuffle_;
+
+  // Auc Runner
+ public:
+  void InitializeAucRunner(std::vector<std::vector<std::string>> slot_eval,
+                           int thread_num, int pool_size,
+                           std::vector<std::string> slot_list) {
+    mode_ = 1;
+    phase_num_ = static_cast<int>(slot_eval.size());
+    phase_ = phase_num_ - 1;
+    auc_runner_thread_num_ = thread_num;
+    pass_done_semi_ = paddle::framework::MakeChannel<int>();
+    pass_done_semi_->Put(1);  // Note: At most 1 pipeline in AucRunner
+    random_ins_pool_list.resize(thread_num);
+
+    std::unordered_set<std::string> slot_set;
+    for (size_t i = 0; i < slot_eval.size(); ++i) {
+      for (const auto& slot : slot_eval[i]) {
+        slot_set.insert(slot);
+      }
+    }
+    for (size_t i = 0; i < slot_list.size(); ++i) {
+      if (slot_set.find(slot_list[i]) != slot_set.end()) {
+        slot_index_to_replace_.insert(static_cast<int16_t>(i));
+      }
+    }
+    for (int i = 0; i < auc_runner_thread_num_; ++i) {
+      random_ins_pool_list[i].SetSlotIndexToReplace(slot_index_to_replace_);
+    }
+    VLOG(0) << "AucRunner configuration: thread number[" << thread_num
+            << "], pool size[" << pool_size << "], runner_group[" << phase_num_
+            << "]";
+    VLOG(0) << "Slots that need to be evaluated:";
+    for (auto e : slot_index_to_replace_) {
+      VLOG(0) << e << ": " << slot_list[e];
+    }
+  }
+  void GetRandomReplace(const std::vector<Record>& pass_data);
+  void AddReplaceFeasign(boxps::PSAgentBase* p_agent, int feed_pass_thread_num);
+  void GetRandomData(const std::vector<Record>& pass_data,
+                     const std::unordered_set<uint16_t>& slots_to_replace,
+                     std::vector<Record>* result);
+  int Mode() const { return mode_; }
+
+ private:
+  int mode_ = 0;  // 0 means train/test 1 means auc_runner
+  int auc_runner_thread_num_ = 1;
+  bool init_done_ = false;
+  paddle::framework::Channel<int> pass_done_semi_;
+  std::unordered_set<uint16_t> slot_index_to_replace_;
+  std::vector<RecordCandidateList> random_ins_pool_list;
+  std::vector<size_t> replace_idx_;
 };
 #endif
 
@@ -787,6 +785,51 @@ class BoxHelper {
     box_ptr->EndPass(need_save_delta);
 #endif
   }
+
+  void ReadData2Memory() {
+    platform::Timer timer;
+    VLOG(3) << "Begin ReadData2Memory(), dataset[" << dataset_ << "]";
+    double feed_pass_span = 0.0;
+    double read_ins_span = 0.0;
+
+    timer.Start();
+#ifdef PADDLE_WITH_BOX_PS
+    struct std::tm b;
+    b.tm_year = year_ - 1900;
+    b.tm_mon = month_ - 1;
+    b.tm_mday = day_;
+    b.tm_min = b.tm_hour = b.tm_sec = 0;
+    std::time_t x = std::mktime(&b);
+
+    auto box_ptr = BoxWrapper::GetInstance();
+    boxps::PSAgentBase* agent = box_ptr->GetAgent();
+    VLOG(3) << "Begin call BeginFeedPass in BoxPS";
+    box_ptr->BeginFeedPass(x / 86400, &agent);
+    timer.Pause();
+
+    feed_pass_span = timer.ElapsedSec();
+
+    timer.Start();
+    // add 0 key
+    agent->AddKey(0ul, 0);
+    dataset_->LoadIntoMemory();
+    timer.Pause();
+    read_ins_span = timer.ElapsedSec();
+
+    timer.Start();
+    // auc runner
+    if (box_ptr->Mode() == 1) {
+      box_ptr->AddReplaceFeasign(agent, box_ptr->GetFeedpassThreadNum());
+    }
+    box_ptr->EndFeedPass(agent);
+#endif
+    timer.Pause();
+
+    VLOG(0) << "begin feedpass: " << feed_pass_span
+            << "s, download + parse cost: " << read_ins_span
+            << "s, end feedpass:" << timer.ElapsedSec() << "s";
+  }
+
   void LoadIntoMemory() {
     platform::Timer timer;
     VLOG(3) << "Begin LoadIntoMemory(), dataset[" << dataset_ << "]";
@@ -810,7 +853,35 @@ class BoxHelper {
     VLOG(3) << "After PreLoadIntoMemory()";
   }
   void WaitFeedPassDone() { feed_data_thread_->join(); }
+  void SlotsShuffle(const std::set<std::string>& slots_to_replace) {
+#ifdef PADDLE_WITH_BOX_PS
+    auto box_ptr = BoxWrapper::GetInstance();
+    PADDLE_ENFORCE_EQ(box_ptr->Mode(), 1,
+                      platform::errors::PreconditionNotMet(
+                          "Should call InitForAucRunner first."));
+    box_ptr->FlipPhase();
 
+    std::unordered_set<uint16_t> index_slots;
+    dynamic_cast<MultiSlotDataset*>(dataset_)->PreprocessChannel(
+        slots_to_replace, index_slots);
+    const std::vector<Record>& pass_data =
+        dynamic_cast<MultiSlotDataset*>(dataset_)->GetSlotsOriginalData();
+    if (!get_random_replace_done_) {
+      box_ptr->GetRandomReplace(pass_data);
+      get_random_replace_done_ = true;
+    }
+    std::vector<Record> random_data;
+    random_data.resize(pass_data.size());
+    box_ptr->GetRandomData(pass_data, index_slots, &random_data);
+
+    auto new_input_channel = paddle::framework::MakeChannel<Record>();
+    new_input_channel->Open();
+    new_input_channel->Write(std::move(random_data));
+    new_input_channel->Close();
+    dynamic_cast<MultiSlotDataset*>(dataset_)->SetInputChannel(
+        new_input_channel);
+#endif
+  }
 #ifdef PADDLE_WITH_BOX_PS
   // notify boxps to feed this pass feasigns from SSD to memory
   static void FeedPassThread(const std::deque<Record>& t, int begin_index,
@@ -823,9 +894,11 @@ class BoxHelper {
       const auto& ins = *iter;
       const auto& feasign_v = ins.uint64_feasigns_;
       for (const auto feasign : feasign_v) {
+        /*
         if (index_map.find(feasign.slot()) != index_map.end()) {
           continue;
         }
+        */
         p_agent->AddKey(feasign.sign().uint64_feasign_, thread_id);
       }
     }
@@ -838,7 +911,8 @@ class BoxHelper {
     b.tm_year = year_ - 1900;
     b.tm_mon = month_ - 1;
     b.tm_mday = day_;
-    b.tm_min = b.tm_hour = b.tm_sec = 0;
+    b.tm_min = b.tm_sec = 0;
+    b.tm_hour = FLAGS_fix_dayid ? 8 : 0;
     std::time_t x = std::mktime(&b);
 
     auto box_ptr = BoxWrapper::GetInstance();
@@ -881,6 +955,10 @@ class BoxHelper {
     for (size_t i = 0; i < tnum; ++i) {
       threads[i].join();
     }
+
+    if (box_ptr->Mode() == 1) {
+      box_ptr->AddReplaceFeasign(p_agent, tnum);
+    }
     VLOG(3) << "Begin call EndFeedPass in BoxPS";
     box_ptr->EndFeedPass(p_agent);
 #endif
@@ -892,7 +970,10 @@ class BoxHelper {
   int year_;
   int month_;
   int day_;
+  bool get_random_replace_done_ = false;
 };
 
 }  // end namespace framework
 }  // end namespace paddle
+
+#include "paddle/fluid/framework/fleet/box_wrapper_impl.h"

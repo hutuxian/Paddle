@@ -365,7 +365,10 @@ class ChannelWriter {
     Reset(channel);
   }
 
-  ~ChannelWriter() { CHECK(buffer_.empty()) << "Forgot to flush"; }
+  ~ChannelWriter() {
+      Flush();
+      CHECK(buffer_.empty()) << "Forgot to flush";
+  }
 
   ChannelObject<T>* channel() { return channel_; }
 

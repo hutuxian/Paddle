@@ -45,7 +45,7 @@ limitations under the License. */
 namespace paddle {
 namespace framework {
 
-std::string PrintLodTensor(LoDTensor* tensor, int64_t start, int64_t end);
+std::string PrintLodTensor(Tensor* tensor, int64_t start, int64_t end);
 std::pair<int64_t, int64_t> GetTensorBound(LoDTensor* tensor, int index);
 bool CheckValidOutput(LoDTensor* tensor, size_t batch_size);
 
@@ -123,6 +123,8 @@ class DeviceWorker {
   virtual void InitRandomDumpConfig(const TrainerDesc& desc);
   virtual void SetDeviceIndex(int tid) = 0;
   virtual void TrainFiles() = 0;
+  virtual void ReadFiles() = 0;
+  virtual void ReadFilesWithProfiler() = 0;
   virtual void PrintFetchVars() = 0;
   virtual void TrainFilesWithProfiler() = 0;
   virtual void CreateDeviceResource(const ProgramDesc& main_prog) = 0;
@@ -171,6 +173,7 @@ class DeviceWorker {
   bool need_dump_field_;
   const std::vector<std::string>* dump_param_;
   const std::vector<std::string>* dump_fields_;
+  std::vector<std::string> all_param_;
 
   int dump_mode_ = 0;
   int dump_interval_ = 10000;
@@ -184,6 +187,8 @@ class CPUWorkerBase : public DeviceWorker {
   virtual void SetDeviceIndex(int tid) { thread_id_ = tid; }
   virtual void TrainFiles() = 0;
   virtual void TrainFilesWithProfiler() {}
+  virtual void ReadFiles() {};
+  virtual void ReadFilesWithProfiler() {};
   virtual void PrintFetchVars() {}
   virtual void CreateDeviceResource(const ProgramDesc& main_prog) {}
 
@@ -203,6 +208,8 @@ class HogwildWorker : public CPUWorkerBase {
   virtual void Initialize(const TrainerDesc& desc);
   virtual void TrainFiles();
   virtual void TrainFilesWithProfiler();
+  virtual void ReadFiles() {};
+  virtual void ReadFilesWithProfiler() {};
   virtual void PrintFetchVars();
   virtual void CreateDeviceResource(const ProgramDesc& main_prog);
   virtual void BindingDataFeedMemory();
@@ -229,6 +236,8 @@ class DownpourWorker : public HogwildWorker {
   virtual void Initialize(const TrainerDesc& desc);
   virtual void TrainFiles();
   virtual void TrainFilesWithProfiler();
+  virtual void ReadFiles() {};
+  virtual void ReadFilesWithProfiler() {};
 
  protected:
   std::shared_ptr<paddle::framework::FleetWrapper> fleet_ptr_;
@@ -298,6 +307,8 @@ class DownpourWorkerOpt : public DownpourWorker {
   virtual void CreateDeviceResource(const ProgramDesc& main_prog);
   virtual void Initialize(const TrainerDesc& desc);
   virtual void TrainFiles();
+  virtual void ReadFiles() {};
+  virtual void ReadFilesWithProfiler() {};
 
  protected:
   void CreateThreadOperatorsWithRerank(const ProgramDesc& program);
@@ -351,6 +362,8 @@ class SectionWorker : public DeviceWorker {
   void BindingDataFeedMemory() override {}
   void CreateDeviceResource(const ProgramDesc& main_prog) override{};
 
+  void ReadFiles() override;
+  void ReadFilesWithProfiler() override;
   void TrainFiles() override;
   void TrainFilesWithProfiler() override;
 
@@ -366,9 +379,13 @@ class SectionWorker : public DeviceWorker {
     in_var_names_ = &in_var_names;
     out_var_names_ = &out_var_names;
   }
-  void SetScopeQueue(ScopeQueue* in_scope_queue, ScopeQueue* out_scope_queue) {
+  void SetScopeQueue(ScopeQueue* in_scope_queue, ScopeQueue* calc_scope_queue, ScopeQueue* out_scope_queue) {
     in_scope_queue_ = in_scope_queue;
+    calc_scope_queue_ = calc_scope_queue;
     out_scope_queue_ = out_scope_queue;
+    VLOG(0) << "in_scope_queue_[" << in_scope_queue_ << "]";
+    VLOG(0) << "calc_scope_queue_[" << calc_scope_queue_ << "]";
+    VLOG(0) << "out_scope_queue_[" << out_scope_queue_ << "]";
   }
   void SetCountMutex(std::mutex* mutex) { worker_count_mutex_ = mutex; }
   void SetWorkerCount(int* worker_count) { worker_count_ = worker_count; }
@@ -392,6 +409,7 @@ class SectionWorker : public DeviceWorker {
   // This worker will consume scope from in_scope_queue_
   // and produce scope to out_scope_queue_
   ScopeQueue* in_scope_queue_ = nullptr;
+  ScopeQueue* calc_scope_queue_ = nullptr;
   ScopeQueue* out_scope_queue_ = nullptr;
   const std::vector<std::string>* in_var_names_ = nullptr;
   const std::vector<std::string>* out_var_names_ = nullptr;
