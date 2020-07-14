@@ -91,13 +91,13 @@ void BasicAucCalculator::init(int table_size, int max_batch_size) {
         _d_positive.emplace_back(
             memory::AllocShared(place, _table_size * sizeof(double)));
         _d_negative.emplace_back(
-            memory::Alloc(place, _table_size * sizeof(double)));
+            memory::AllocShared(place, _table_size * sizeof(double)));
         _d_abserr.emplace_back(
-            memory::Alloc(place, _max_batch_size * sizeof(double)));
+            memory::AllocShared(place, _max_batch_size * sizeof(double)));
         _d_sqrerr.emplace_back(
-            memory::Alloc(place, _max_batch_size * sizeof(double)));
+            memory::AllocShared(place, _max_batch_size * sizeof(double)));
         _d_pred.emplace_back(
-            memory::Alloc(place, _max_batch_size * sizeof(double)));
+            memory::AllocShared(place, _max_batch_size * sizeof(double)));
       }
     }
     // reset
@@ -242,6 +242,7 @@ void BasicAucCalculator::compute() {
   }
 
   double* table[2] = {&_table[0][0], &_table[1][0]};
+
   if (boxps::MPICluster::Ins().size() > 1) {
     boxps::MPICluster::Ins().allreduce_sum(table[0], _table_size);
     boxps::MPICluster::Ins().allreduce_sum(table[1], _table_size);
@@ -412,25 +413,29 @@ void BasicAucCalculator::calculate_bucket_error() {
 
 // Deprecated: should use BeginFeedPass & EndFeedPass
 void BoxWrapper::FeedPass(int date,
-                          const std::vector<uint64_t>& feasgin_to_box) const {
+                          const std::vector<uint64_t>& feasgin_to_box) {
   int ret = boxps_ptr_->FeedPass(date, feasgin_to_box);
   PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
                                 "FeedPass failed in BoxPS."));
 }
 
-void BoxWrapper::BeginFeedPass(int date, boxps::PSAgentBase** agent) const {
+void BoxWrapper::BeginFeedPass(int date, boxps::PSAgentBase** agent) {
   int ret = boxps_ptr_->BeginFeedPass(date, *agent);
+  int dim = 256;
+  query_emb_set_q.emplace_back(dim);
   PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
                                 "BeginFeedPass failed in BoxPS."));
 }
 
-void BoxWrapper::EndFeedPass(boxps::PSAgentBase* agent) const {
+void BoxWrapper::EndFeedPass(boxps::PSAgentBase* agent) {
+  std::cout << "END FEED:" << query_emb_set_q.back().h_emb_count << " "<< query_emb_set_q.back().h_emb.size() << std::endl; 
+  query_emb_set_q.back().to_hbm();
   int ret = boxps_ptr_->EndFeedPass(agent);
   PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
                                 "EndFeedPass failed in BoxPS."));
 }
 
-void BoxWrapper::BeginPass() const {
+void BoxWrapper::BeginPass() {
   int ret = boxps_ptr_->BeginPass();
   PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
                                 "BeginPass failed in BoxPS."));
@@ -440,7 +445,8 @@ void BoxWrapper::SetTestMode(bool is_test) const {
   boxps_ptr_->SetTestMode(is_test);
 }
 
-void BoxWrapper::EndPass(bool need_save_delta) const {
+void BoxWrapper::EndPass(bool need_save_delta) {
+  query_emb_set_q.pop_front();
   int ret = boxps_ptr_->EndPass(need_save_delta);
   PADDLE_ENFORCE_EQ(
       ret, 0, platform::errors::PreconditionNotMet("EndPass failed in BoxPS."));

@@ -2476,10 +2476,24 @@ void SlotPaddleBoxDataFeed::LoadIntoMemoryByCommand(void) {
     SlotRecordPool().get(&record_vec, max_fetch_num);
 
     int offset = 0;
+    int query_emb_offset;
+    auto box_ptr = paddle::framework::BoxWrapper::GetInstance();
+
     line_reader.read_file(
         this->fp_.get(),
-        [this, &record_vec, &offset, &max_fetch_num](const std::string& line) {
-          if (ParseOneInstance(line, &record_vec[offset])) {
+        [this, &record_vec, &offset, &max_fetch_num, &query_emb_offset, &box_ptr](const std::string& line) {
+          if (line[0] == '#') {
+            std::vector<float> query_emb;
+            char* pos = const_cast<char*>(line.c_str() + 1);
+            for (int i = 0; i < 256; ++i) {
+              float feasign = strtof(pos, &pos);
+              query_emb.push_back(feasign);
+            }
+            auto& set = box_ptr->query_emb_set_q.back();
+            query_emb_offset = set.AddEmb(query_emb);
+            return;
+          }
+          if (ParseOneInstance(line, &record_vec[offset], query_emb_offset)) {
             ++offset;
           }
           if (offset >= max_fetch_num) {
@@ -2518,7 +2532,8 @@ static void parser_log_key(const std::string& log_key, uint64_t* search_id,
 }
 
 bool SlotPaddleBoxDataFeed::ParseOneInstance(const std::string& line,
-                                             SlotRecord* ins) {
+                                             SlotRecord* ins,
+                                             int query_emb_offset) {
   SlotRecord& rec = (*ins);
   // parse line
   const char* str = line.c_str();
@@ -2579,6 +2594,16 @@ bool SlotPaddleBoxDataFeed::ParseOneInstance(const std::string& line,
 
   for (size_t i = 0; i < all_slots_info_.size(); ++i) {
     auto& info = all_slots_info_[i];
+    
+    if (i == 3) {
+        auto& slot_fea = slot_uint64_feasigns[info.slot_value_idx];
+        uint64_t feasign = static_cast<uint64_t>(query_emb_offset);
+        slot_fea.clear();
+        slot_fea.push_back(feasign);
+        ++uint64_total_slot_num;
+        continue;
+    }
+
     int num = strtol(&str[pos], &endptr, 10);
     PADDLE_ENFORCE(num,
                    "The number of ids can not be zero, you need padding "
@@ -2621,6 +2646,7 @@ bool SlotPaddleBoxDataFeed::ParseOneInstance(const std::string& line,
       }
     }
   }
+  
   rec->slot_float_feasigns_.add_slot_feasigns(slot_float_feasigns,
                                               float_total_slot_num);
   rec->slot_uint64_feasigns_.add_slot_feasigns(slot_uint64_feasigns,

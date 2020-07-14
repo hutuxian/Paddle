@@ -56,6 +56,23 @@ class PullBoxSparseOp : public framework::OperatorWithKernel {
   }
 };
 
+class PullBoxQueryEmbOp : public framework::OperatorWithKernel {
+ public:
+  using framework::OperatorWithKernel::OperatorWithKernel;
+  void InferShape(framework::InferShapeContext* ctx) const override {
+    auto input_dim = ctx->GetInputDim("Id");
+    ctx->SetOutputDim("Out", {input_dim[0], 256});
+    ctx->ShareLoD("Id", "Out");
+  }
+
+ protected:
+  framework::OpKernelType GetExpectedKernelType(
+      const framework::ExecutionContext& ctx) const override {
+    return framework::OpKernelType(framework::proto::VarType::FP32,
+                                   ctx.device_context());
+  }
+};
+
 class PullBoxSparseOpMaker : public framework::OpProtoAndCheckerMaker {
  public:
   void Make() override {
@@ -66,6 +83,27 @@ class PullBoxSparseOpMaker : public framework::OpProtoAndCheckerMaker {
         .AsDuplicable();
     AddOutput("Out", "The lookup results tensors.").AsDuplicable();
     AddAttr<int>("size", "(int, the embedding hidden size").SetDefault(1);
+    AddComment(R"DOC(
+Pull Box Sparse Operator.
+
+This operator is used to perform lookups on the BoxPS,
+then concatenated into a dense tensor.
+
+The input Ids can carry the LoD (Level of Details) information,
+or not. And the output only shares the LoD information with input Ids.
+
+)DOC");
+  }
+};
+
+class PullBoxQueryEmbOpMaker : public framework::OpProtoAndCheckerMaker {
+ public:
+  void Make() override {
+    AddInput("Id",
+             "Input tensors with type int32 or int64 "
+             "contains the ids to be looked up in BoxPS. "
+             "The last dimension size must be 1.");
+    AddOutput("Out", "The lookup results tensors.");
     AddComment(R"DOC(
 Pull Box Sparse Operator.
 
@@ -94,6 +132,21 @@ class PushBoxSparseOpMaker : public framework::SingleGradOpMaker<T> {
   }
 };
 
+template <typename T>
+class PushBoxQuerEmbOpMaker : public framework::SingleGradOpMaker<T> {
+ public:
+  using framework::SingleGradOpMaker<T>::SingleGradOpMaker;
+
+ protected:
+  void Apply(GradOpPtr<T> op) const override {
+    op->SetType("push_box_query_emb");
+    op->SetInput("Id", this->Input("Id"));
+    op->SetInput(framework::GradVarName("Out"), this->OutputGrad("Out"));
+    op->SetOutput(framework::GradVarName("Out"), this->OutputGrad("Out"));
+    op->SetAttrMap(this->Attrs());
+  }
+};
+
 class PushBoxSparseOp : public framework::OperatorWithKernel {
  public:
   using framework::OperatorWithKernel::OperatorWithKernel;
@@ -108,6 +161,7 @@ class PushBoxSparseOp : public framework::OperatorWithKernel {
                                    ctx.device_context());
   }
 };
+
 }  // namespace operators
 }  // namespace paddle
 
@@ -119,3 +173,10 @@ REGISTER_OPERATOR(pull_box_sparse, ops::PullBoxSparseOp,
 REGISTER_OPERATOR(push_box_sparse, ops::PushBoxSparseOp);
 REGISTER_OP_CPU_KERNEL(pull_box_sparse, ops::PullBoxSparseCPUKernel<float>)
 REGISTER_OP_CPU_KERNEL(push_box_sparse, ops::PushBoxSparseCPUKernel<float>)
+
+REGISTER_OPERATOR(pull_box_query_emb, ops::PullBoxQueryEmbOp,
+                  ops::PullBoxQueryEmbOpMaker,
+                  ops::PushBoxQuerEmbOpMaker<paddle::framework::OpDesc>,
+                  ops::PushBoxQuerEmbOpMaker<paddle::imperative::OpBase>);
+REGISTER_OP_CPU_KERNEL(pull_box_query_emb, ops::PullBoxQueryEmbCPUKernel<float>)
+REGISTER_OPERATOR(push_box_query_emb, ops::PushBoxSparseOp);

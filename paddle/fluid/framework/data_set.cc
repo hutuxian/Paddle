@@ -1967,6 +1967,40 @@ void PadBoxSlotDataset::PrepareTrain(void) {
                         ->GetBatchSize();
     compute_thread_batch_nccl(thread_num_, GetMemoryDataSize(), batchsize,
                               &offset);
+    //tdm_input_records_.resize(input_records_.size());
+    //std::vector<std::vector<SlotRecord>> tmp;
+    //tmp.resize(8);
+    //for (size_t i = 0; i < input_records_.size(); ++i) {
+    //  //std::cout << input_records_[i]->slot_uint64_feasigns_.slot_values[1] << std::endl;
+    //  input_records_[i]->slot_uint64_feasigns_.slot_values[2] = input_records_[i]->slot_uint64_feasigns_.slot_values[1];
+    //  tmp[input_records_[i]->slot_uint64_feasigns_.slot_values[2] % 8].push_back(input_records_[i]);
+    //}
+    //size_t min_size = tmp[0].size();
+    //for (int i = 0; i < 8; ++i) {
+    //  std::shuffle(tmp[i].begin(), tmp[i].end(),
+    //               BoxWrapper::LocalRandomEngine());
+    //  if (tmp[i].size() < min_size) {
+    //    min_size = tmp[i].size();
+    //  }
+    //  std::cout << "size:" << i << " " << tmp[i].size() << std::endl;
+    //}
+    //int g_cur = 0;
+    //int l_cur = 0;
+    //while (min_size) {
+    //  int bs = std::min(min_size, batchsize);
+    //  for (int c = 0; c < 8; ++c) {
+    //    offset.push_back(std::make_pair(g_cur, bs));
+    //    for (int i = 0; i < bs; ++i) {
+    //      tdm_input_records_[g_cur] = tmp[c][l_cur + i];
+    //      ++g_cur;
+    //    }
+    //  }
+    //  l_cur += bs;
+    //  min_size -= bs;
+    //}
+
+    //std::cout << "total size:" << input_records_.size() << " " << g_cur << std::endl;
+    
     for (int i = 0; i < thread_num_; ++i) {
       reinterpret_cast<SlotPaddleBoxDataFeed*>(readers_[i].get())
           ->SetSlotRecord(&input_records_[0]);

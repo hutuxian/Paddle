@@ -291,6 +291,7 @@ class DatasetImpl : public Dataset {
   int64_t global_index_ = 0;
   std::vector<std::shared_ptr<ThreadPool>> consume_task_pool_;
   std::vector<T> input_records_;  // only for paddleboxdatafeed
+  std::vector<T> tdm_input_records_;  // only for paddleboxdatafeed
 };
 
 // use std::vector<MultiSlotType> or Record as data type

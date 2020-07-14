@@ -648,6 +648,19 @@ def _pull_sparse_v2(input,
     return outs
 
 
+def _pull_box_query_emb(input, dtype='float32'):
+    """
+    **Pull Box Sparse Layer**
+    """
+    helper = LayerHelper('pull_box_query_emb', **locals())
+    out = helper.create_variable_for_type_inference(dtype)
+    helper.append_op(
+        type='pull_box_query_emb',
+        inputs={'Id': [input]},
+        outputs={'Out': [out]})
+    return out
+
+
 def _pull_box_sparse(input, size, dtype='float32'):
     """
     **Pull Box Sparse Layer**

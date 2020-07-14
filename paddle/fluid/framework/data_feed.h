@@ -1174,7 +1174,7 @@ class SlotPaddleBoxDataFeed : public DataFeed {
   void BuildSlotBatchGPU(void);
   void GetRankOffsetGPU(void);
   void GetRankOffset(const SlotPvInstance* pv_vec, int pv_num, int ins_number);
-  bool ParseOneInstance(const std::string& line, SlotRecord* rec);
+  bool ParseOneInstance(const std::string& line, SlotRecord* rec, int query_emb_offset);
 
  private:
 #if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
