@@ -158,10 +158,10 @@ __global__ void AddBasicCalculator(const float* pred, const int64_t* label,
       pos = table_size - 1;
     }
     if (label[ins_idx] == 0) {
-      atomicAdd(negative + pos, 1.0);
+      atomicAdd(reinterpret_cast<int*>(negative + pos), 1);
       // negative[pos]++;
     } else {
-      atomicAdd(positive + pos, 1.0);
+      atomicAdd(reinterpret_cast<int*>(positive + pos), 1);
       // positive[pos]++;
     }
     double err = pred[ins_idx] - label[ins_idx];
