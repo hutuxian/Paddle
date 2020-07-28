@@ -838,7 +838,7 @@ class SlotObjAllocator {
       delete tmp;
       --capacity_;
     }
-    CHECK_EQ(capacity_, 0);
+    CHECK_EQ(capacity_, static_cast<size_t>(0));
   }
   T* acquire(void) {
     T* x = NULL;
