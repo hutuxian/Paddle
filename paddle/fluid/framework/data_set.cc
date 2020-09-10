@@ -1798,7 +1798,7 @@ void PadBoxSlotDataset::CreateReaders() {
   VLOG(3) << "data feed class name: " << data_feed_desc_.name();
   for (int i = 0; i < thread_num_; ++i) {
     readers_.push_back(
-        DataFeedFactory::CreateDataFeed("SlotPaddleBoxDataFeed"));
+        DataFeedFactory::CreateDataFeed(data_feed_desc_.name()));
     readers_[i]->Init(data_feed_desc_);
     readers_[i]->SetThreadId(i);
     readers_[i]->SetThreadNum(thread_num_);

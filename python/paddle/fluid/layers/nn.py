@@ -647,6 +647,18 @@ def _pull_sparse_v2(input,
         return outs[0]
     return outs
 
+def _pull_cache_value(input, size, dtype='float32'):
+    """
+    **Pull Box Sparse Layer**
+    """
+    helper = LayerHelper('pull_cache_value', **locals())
+    out = helper.create_variable_for_type_inference(dtype)
+    helper.append_op(
+        type='pull_cache_value',
+        inputs={'Id': [input]},
+        outputs={'Out': [out]},
+        attrs={'size': size})
+    return out
 
 def _pull_box_sparse(input, size, dtype='float32'):
     """
