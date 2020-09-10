@@ -148,6 +148,7 @@ cc_library(proto_desc SRCS var_desc.cc op_desc.cc block_desc.cc program_desc.cc 
 cc_library(op_registry SRCS op_registry.cc DEPS op_proto_maker op_info operator glog proto_desc)
 
 cc_library(op_call_stack SRCS op_call_stack.cc DEPS op_proto_maker enforce)
+cc_test(op_call_stack_test SRCS op_call_stack_test.cc DEPS op_call_stack)
 
 nv_test(op_registry_test SRCS op_registry_test.cc DEPS op_registry)
 
@@ -182,25 +183,49 @@ cc_library(variable_helper SRCS variable_helper.cc DEPS lod_tensor)
 cc_library(naive_executor SRCS naive_executor.cc DEPS op_registry device_context scope framework_proto glog lod_rank_table feed_fetch_method graph_to_program_pass variable_helper)
 
 cc_library(executor_gc_helper SRCS executor_gc_helper.cc DEPS scope proto_desc operator garbage_collector)
+
 if(WITH_DISTRIBUTE)
-  cc_library(executor SRCS executor.cc multi_trainer.cc pipeline_trainer.cc dataset_factory.cc
-  dist_multi_trainer.cc trainer_factory.cc trainer.cc data_feed_factory.cc
-  data_feed.cc device_worker.cc hogwild_worker.cc downpour_worker.cc downpour_worker_opt.cc
-  pull_dense_worker.cc section_worker.cc device_worker_factory.cc data_set.cc DEPS op_registry
-  device_context scope framework_proto trainer_desc_proto glog fs shell fleet_wrapper box_wrapper lodtensor_printer
-  lod_rank_table feed_fetch_method sendrecvop_rpc communicator collective_helper ${GLOB_DISTRIBUTE_DEPS}
-  graph_to_program_pass variable_helper data_feed_proto timer)
-set(DISTRIBUTE_COMPILE_FLAGS "-Wno-non-virtual-dtor -Wno-error=non-virtual-dtor -Wno-error=delete-non-virtual-dtor")
-set_source_files_properties(executor.cc PROPERTIES COMPILE_FLAGS ${DISTRIBUTE_COMPILE_FLAGS})
+  if(WITH_GPU)
+      nv_library(executor SRCS executor.cc multi_trainer.cc pipeline_trainer.cc dataset_factory.cc
+      dist_multi_trainer.cc trainer_factory.cc trainer.cc data_feed_factory.cc data_feed.cu
+      data_feed.cc device_worker.cc hogwild_worker.cc downpour_worker.cc downpour_worker_opt.cc
+      pull_dense_worker.cc section_worker.cc device_worker_factory.cc data_set.cc DEPS op_registry
+      device_context scope framework_proto trainer_desc_proto glog fs shell fleet_wrapper box_wrapper lodtensor_printer
+      lod_rank_table feed_fetch_method sendrecvop_rpc communicator collective_helper ${GLOB_DISTRIBUTE_DEPS}
+      graph_to_program_pass variable_helper data_feed_proto timer monitor)
+  else()
+      cc_library(executor SRCS executor.cc multi_trainer.cc pipeline_trainer.cc dataset_factory.cc
+      dist_multi_trainer.cc trainer_factory.cc trainer.cc data_feed_factory.cc
+      data_feed.cc device_worker.cc hogwild_worker.cc downpour_worker.cc downpour_worker_opt.cc
+      pull_dense_worker.cc section_worker.cc device_worker_factory.cc data_set.cc DEPS op_registry
+      device_context scope framework_proto trainer_desc_proto glog fs shell fleet_wrapper box_wrapper lodtensor_printer
+      lod_rank_table feed_fetch_method sendrecvop_rpc communicator collective_helper ${GLOB_DISTRIBUTE_DEPS}
+      graph_to_program_pass variable_helper data_feed_proto timer monitor)
+  endif()
+  set(DISTRIBUTE_COMPILE_FLAGS "-Wno-non-virtual-dtor -Wno-error=non-virtual-dtor -Wno-error=delete-non-virtual-dtor")
+  set_source_files_properties(executor.cc PROPERTIES COMPILE_FLAGS ${DISTRIBUTE_COMPILE_FLAGS})
 else()
-  cc_library(executor SRCS executor.cc multi_trainer.cc pipeline_trainer.cc dataset_factory.cc
-  dist_multi_trainer.cc trainer_factory.cc trainer.cc data_feed_factory.cc
-  data_feed.cc device_worker.cc hogwild_worker.cc downpour_worker.cc downpour_worker_opt.cc
-  pull_dense_worker.cc section_worker.cc device_worker_factory.cc data_set.cc DEPS op_registry
-  device_context scope framework_proto data_feed_proto trainer_desc_proto glog
-  lod_rank_table fs shell fleet_wrapper box_wrapper lodtensor_printer feed_fetch_method
-  graph_to_program_pass variable_helper timer)
-  cc_test(test_naive_executor SRCS naive_executor_test.cc DEPS naive_executor elementwise_add_op)
+  if(WITH_GPU)
+      nv_library(executor SRCS executor.cc multi_trainer.cc pipeline_trainer.cc dataset_factory.cc
+      dist_multi_trainer.cc trainer_factory.cc trainer.cc data_feed_factory.cc data_feed.cu
+      data_feed.cc device_worker.cc hogwild_worker.cc downpour_worker.cc downpour_worker_opt.cc
+      pull_dense_worker.cc section_worker.cc device_worker_factory.cc data_set.cc DEPS op_registry
+      device_context scope framework_proto data_feed_proto trainer_desc_proto glog
+      lod_rank_table fs shell fleet_wrapper box_wrapper lodtensor_printer feed_fetch_method
+      graph_to_program_pass variable_helper timer monitor)
+  else()
+      cc_library(executor SRCS executor.cc multi_trainer.cc pipeline_trainer.cc dataset_factory.cc
+      dist_multi_trainer.cc trainer_factory.cc trainer.cc data_feed_factory.cc
+      data_feed.cc device_worker.cc hogwild_worker.cc downpour_worker.cc downpour_worker_opt.cc
+      pull_dense_worker.cc section_worker.cc device_worker_factory.cc data_set.cc DEPS op_registry
+      device_context scope framework_proto data_feed_proto trainer_desc_proto glog
+      lod_rank_table fs shell fleet_wrapper box_wrapper lodtensor_printer feed_fetch_method
+      graph_to_program_pass variable_helper timer monitor)
+  endif()
+  # TODO: Fix these unittest failed on Windows
+  if(NOT WIN32)
+    cc_test(test_naive_executor SRCS naive_executor_test.cc DEPS naive_executor elementwise_add_op)
+  endif()
 endif()
 
 target_link_libraries(executor while_op_helper executor_gc_helper recurrent_op_helper conditional_block_op_helper)

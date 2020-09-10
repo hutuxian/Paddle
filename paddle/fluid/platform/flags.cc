@@ -473,3 +473,14 @@ DEFINE_double(local_exe_sub_scope_limit, 256.0,  // MBytes
               "each CUDAPlace. If you don't need to limit the memory, "
               "you should set FLAGS_local_exe_sub_scope_limit=-1. "
               "The default value is 256 MBytes.");
+
+DEFINE_int32(fix_dayid, 0, "Whether fix dayid in PaddleBox");
+DEFINE_int32(padbox_record_pool_max_size, 2000000,
+             "PadBoxSlotDataset slot record pool max size");
+DEFINE_int32(padbox_dataset_shuffle_thread_num, 10,
+             "PadBoxSlotDataset shuffle thread num");
+DEFINE_int32(padbox_dataset_merge_thread_num, 10,
+             "PadBoxSlotDataset shuffle thread num");
+DEFINE_int32(padbox_slotpool_thread_num, 1,
+             "PadBoxSlotDataset slot pool thread num");
+

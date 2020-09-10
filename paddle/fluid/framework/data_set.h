@@ -26,6 +26,8 @@
 #include <vector>
 
 #include "paddle/fluid/framework/data_feed.h"
+DECLARE_int32(padbox_dataset_shuffle_thread_num);
+DECLARE_int32(padbox_dataset_merge_thread_num);
 
 namespace paddle {
 namespace framework {
@@ -67,6 +69,7 @@ class Dataset {
   virtual void SetParseContent(bool parse_content) = 0;
   virtual void SetParseLogKey(bool parse_logkey) = 0;
   virtual void SetEnablePvMerge(bool enable_pv_merge) = 0;
+  virtual bool EnablePvMerge() = 0;
   virtual void SetMergeBySid(bool is_merge) = 0;
   // set merge by ins id
   virtual void SetMergeByInsId(int merge_size) = 0;
@@ -104,14 +107,13 @@ class Dataset {
   virtual void WaitPreLoadDone() = 0;
   // release all memory data
   virtual void ReleaseMemory() = 0;
+  virtual void ReleaseMemoryFun() = 0;
+
   // local shuffle data
   virtual void LocalShuffle() = 0;
   // global shuffle data
   virtual void GlobalShuffle(int thread_num = -1) = 0;
-  // for slots shuffle
   virtual void SlotsShuffle(const std::set<std::string>& slots_to_replace) = 0;
-  virtual void GetRandomData(const std::set<uint16_t>& slots_to_replace,
-                             std::vector<Record>* result) = 0;
   // create readers
   virtual void CreateReaders() = 0;
   // destroy readers
@@ -159,7 +161,11 @@ template <typename T>
 class DatasetImpl : public Dataset {
  public:
   DatasetImpl();
-  virtual ~DatasetImpl() {}
+  virtual ~DatasetImpl() {
+    if (release_thread_ != nullptr) {
+      release_thread_->join();
+    }
+  }
 
   virtual void SetFileList(const std::vector<std::string>& filelist);
   virtual void SetThreadNum(int thread_num);
@@ -183,6 +189,9 @@ class DatasetImpl : public Dataset {
   virtual int GetThreadNum() { return thread_num_; }
   virtual int GetTrainerNum() { return trainer_num_; }
   virtual Channel<T> GetInputChannel() { return input_channel_; }
+  virtual void SetInputChannel(const Channel<T>& input_channel) {
+    input_channel_ = input_channel;
+  }
   virtual int64_t GetFleetSendBatchSize() { return fleet_send_batch_size_; }
   virtual std::pair<std::string, std::string> GetHdfsConfig() {
     return std::make_pair(fs_name_, fs_ugi_);
@@ -192,6 +201,7 @@ class DatasetImpl : public Dataset {
     return data_feed_desc_;
   }
   virtual int GetChannelNum() { return channel_num_; }
+  virtual bool EnablePvMerge() { return enable_pv_merge_; }
   virtual std::vector<paddle::framework::DataFeed*> GetReaders();
   virtual void CreateChannel();
   virtual void RegisterClientToClientMsgHandler();
@@ -199,11 +209,13 @@ class DatasetImpl : public Dataset {
   virtual void PreLoadIntoMemory();
   virtual void WaitPreLoadDone();
   virtual void ReleaseMemory();
+  virtual void ReleaseMemoryFun();
   virtual void LocalShuffle();
   virtual void GlobalShuffle(int thread_num = -1);
   virtual void SlotsShuffle(const std::set<std::string>& slots_to_replace) {}
-  virtual void GetRandomData(const std::set<uint16_t>& slots_to_replace,
-                             std::vector<Record>* result) {}
+  virtual const std::vector<T>& GetSlotsOriginalData() {
+    return slots_shuffle_original_data_;
+  }
   virtual void CreateReaders();
   virtual void DestroyReaders();
   virtual int64_t GetMemoryDataSize();
@@ -232,6 +244,7 @@ class DatasetImpl : public Dataset {
   std::vector<std::shared_ptr<paddle::framework::DataFeed>> readers_;
   std::vector<std::shared_ptr<paddle::framework::DataFeed>> preload_readers_;
   paddle::framework::Channel<T> input_channel_;
+  paddle::framework::Channel<T*> input_ptr_channel_;
   paddle::framework::Channel<PvInstance> input_pv_channel_;
   std::vector<paddle::framework::Channel<PvInstance>> multi_pv_output_;
   std::vector<paddle::framework::Channel<PvInstance>> multi_pv_consume_;
@@ -239,6 +252,8 @@ class DatasetImpl : public Dataset {
   int channel_num_;
   std::vector<paddle::framework::Channel<T>> multi_output_channel_;
   std::vector<paddle::framework::Channel<T>> multi_consume_channel_;
+  std::vector<paddle::framework::Channel<T*>> output_ptr_channel_;
+  std::vector<paddle::framework::Channel<T*>> consume_ptr_channel_;
   std::vector<std::unordered_set<uint64_t>> local_tables_;
   // when read ins, we put ins from one channel to the other,
   // and when finish reading, we set cur_channel = 1 - cur_channel,
@@ -252,12 +267,15 @@ class DatasetImpl : public Dataset {
   int trainer_num_;
   std::vector<std::string> filelist_;
   size_t file_idx_;
+  uint64_t total_fea_num_;
   std::mutex mutex_for_pick_file_;
+  std::mutex mutex_for_fea_num_;
   std::string fs_name_;
   std::string fs_ugi_;
   int64_t fleet_send_batch_size_;
   int64_t fleet_send_sleep_seconds_;
   std::vector<std::thread> preload_threads_;
+  std::thread* release_thread_ = nullptr;
   bool merge_by_insid_;
   bool parse_ins_id_;
   bool parse_content_;
@@ -293,11 +311,74 @@ class MultiSlotDataset : public DatasetImpl<Record> {
     }
     std::vector<std::unordered_set<uint64_t>>().swap(local_tables_);
   }
+  virtual void PreprocessChannel(
+      const std::set<std::string>& slots_to_replace,
+      std::unordered_set<uint16_t>& index_slot);  // NOLINT
   virtual void SlotsShuffle(const std::set<std::string>& slots_to_replace);
-  virtual void GetRandomData(const std::set<uint16_t>& slots_to_replace,
-                             std::vector<Record>* result);
+  virtual void GetRandomData(
+      const std::unordered_set<uint16_t>& slots_to_replace,
+      std::vector<Record>* result);
   virtual ~MultiSlotDataset() {}
 };
+
+#ifdef PADDLE_WITH_BOX_PS
+class PadBoxSlotDataset : public DatasetImpl<SlotRecord> {
+ public:
+  PadBoxSlotDataset();
+  virtual ~PadBoxSlotDataset();
+  // seperate train thread and dataset thread
+  virtual void DynamicAdjustChannelNum(int channel_num,
+                                       bool discard_remaining_ins = false) {
+    // not need to
+  }
+  // dynamic adjust reader num
+  virtual void DynamicAdjustReadersNum(int thread_num);
+  // set file list
+  virtual void SetFileList(const std::vector<std::string>& filelist);
+  // create input channel and output channel
+  virtual void CreateChannel();
+  // load all data into memory
+  virtual void LoadIntoMemory();
+  // release all memory data
+  virtual void ReleaseMemory();
+  // create readers
+  virtual void CreateReaders();
+  // destroy readers
+  virtual void DestroyReaders();
+  // merge pv instance
+  virtual void PreprocessInstance();
+  // restore
+  virtual void PostprocessInstance();
+  // prepare train do something
+  virtual void PrepareTrain(void);
+  virtual int64_t GetMemoryDataSize() { return input_records_.size(); }
+  virtual int64_t GetPvDataSize() { return input_pv_ins_.size(); }
+  virtual int64_t GetShuffleDataSize() { return input_records_.size(); }
+
+ protected:
+  // shuffle data
+  virtual void ShuffleData(std::vector<std::thread>* shuffle_threads,
+                           int thread_num = -1);
+
+ public:
+  virtual void ReceiveSuffleData(const int client_id, const char* msg, int len);
+
+ private:
+  void MergeInsKeys(const Channel<SlotRecord>& in);
+
+ private:
+  Channel<SlotRecord> shuffle_channel_ = nullptr;
+  std::vector<int> mpi_flags_;
+  std::atomic<int> finished_counter_{0};
+  int mpi_size_ = 1;
+  int mpi_rank_ = 0;
+  std::vector<SlotPvInstance> input_pv_ins_;
+  int shuffle_thread_num_ = FLAGS_padbox_dataset_shuffle_thread_num;
+  std::atomic<int> shuffle_counter_{0};
+  void* data_consumer_ = nullptr;
+  std::atomic<int> receiver_cnt_{0};
+};
+#endif
 
 }  // end namespace framework
 }  // end namespace paddle
