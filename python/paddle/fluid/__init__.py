@@ -224,6 +224,7 @@ def __bootstrap__():
             'padbox_record_pool_max_size',
             'padbox_dataset_shuffle_thread_num',
             'padbox_dataset_merge_thread_num',
+            'use_gpu_replica_cache',
         ]
     core.init_gflags(["--tryfromenv=" + ",".join(read_env_flags)])
     core.init_glog(sys.argv[0])

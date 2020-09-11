@@ -483,4 +483,5 @@ DEFINE_int32(padbox_dataset_merge_thread_num, 10,
              "PadBoxSlotDataset shuffle thread num");
 DEFINE_int32(padbox_slotpool_thread_num, 1,
              "PadBoxSlotDataset slot pool thread num");
-
+DEFINE_bool(use_gpu_replica_cache, false,
+            "if true ,will open use_gpu_replica_cache");

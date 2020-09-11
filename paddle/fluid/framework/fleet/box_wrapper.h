@@ -281,7 +281,7 @@ class BoxWrapper {
       const char* conf_file, const std::vector<int>& slot_vector,
       const std::vector<std::string>& slot_omit_in_feedpass,
       const std::string& model_path,
-      const std::map<std::string, float>& lr_map, bool is_hbm_query) {
+      const std::map<std::string, float>& lr_map) {
     if (nullptr != s_instance_) {
       VLOG(3) << "Begin InitializeGPU";
       std::vector<cudaStream_t*> stream_list;
@@ -305,7 +305,6 @@ class BoxWrapper {
         slot_name_omited_in_feedpass_.insert(slot_name);
       }
       slot_vector_ = slot_vector;
-      is_hbm_query_ = is_hbm_query;
       device_caches_ = new DeviceBoxData[gpu_num];
 
       VLOG(0) << "lr_map.size(): " << lr_map.size();
@@ -820,7 +819,6 @@ class BoxWrapper {
   // box device cache
   DeviceBoxData* device_caches_ = nullptr;
   std::map<std::string, float> lr_map_;
-  bool is_hbm_query_ = false;
  public:
   static std::shared_ptr<boxps::PaddleShuffler> data_shuffle_;
 

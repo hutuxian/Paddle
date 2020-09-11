@@ -21,6 +21,8 @@
 #include "paddle/fluid/platform/collective_helper.h"
 #include "paddle/fluid/platform/gpu_info.h"
 
+DECLARE_bool(use_gpu_replica_cache);
+
 namespace paddle {
 namespace framework {
 
@@ -455,7 +457,7 @@ void BoxWrapper::FeedPass(int date,
 
 void BoxWrapper::BeginFeedPass(int date, boxps::PSAgentBase** agent) {
   int ret = boxps_ptr_->BeginFeedPass(date, *agent);
-  if(BoxWrapper::is_hbm_query_){
+  if(FLAGS_use_gpu_replica_cache){
     int dim = BoxWrapper::embedx_dim_;
     std::cout << "query emb dim:" << dim << std::endl;
     query_emb_set_q.emplace_back(dim); 
@@ -465,7 +467,7 @@ void BoxWrapper::BeginFeedPass(int date, boxps::PSAgentBase** agent) {
 }
 
 void BoxWrapper::EndFeedPass(boxps::PSAgentBase* agent) {
-  if(BoxWrapper::is_hbm_query_){
+  if(FLAGS_use_gpu_replica_cache){
     std::cout << "END FEED:" << query_emb_set_q.back().h_emb_count << " "<< query_emb_set_q.back().h_emb.size() << std::endl;
     query_emb_set_q.back().to_hbm();
   }
@@ -490,7 +492,7 @@ void BoxWrapper::SetTestMode(bool is_test) const {
 }
 
 void BoxWrapper::EndPass(bool need_save_delta) {
-  if(BoxWrapper::is_hbm_query_){
+  if(FLAGS_use_gpu_replica_cache){
     query_emb_set_q.pop_front();
   }
   int ret = boxps_ptr_->EndPass(need_save_delta);
