@@ -2729,13 +2729,13 @@ void SlotPaddleBoxDataFeedWithGpuReplicaCache::LoadIntoMemoryByLib(void) {
     SlotRecordPool().get(&record_vec, max_fetch_num);
     from_pool_num = GetTotalFeaNum(record_vec, max_fetch_num);
     auto box_ptr = paddle::framework::BoxWrapper::GetInstance();
-    auto& set = box_ptr->query_emb_set_q.back();
+    auto& set = box_ptr->gpu_replica_cache.back();
     auto func = [this, &parser, &set, &record_vec, &offset, &max_fetch_num,
                  &from_pool_num, &filename](const std::string& line) {
       int old_offset = offset;
       if (!parser->ParseOneInstance(
               line,[this, &set](std::vector<float>& query_emb) -> int {
-                        return set.AddEmb(query_emb);
+                        return set.AddGpuCache(query_emb);
                 },
                  [this, &offset, &record_vec, &max_fetch_num, &old_offset](
                         std::vector<SlotRecord>& vec, int num) {
@@ -2846,12 +2846,12 @@ void SlotPaddleBoxDataFeedWithGpuReplicaCache::LoadIntoMemoryByCommand(void) {
           if (line[0] == '#') {
             std::vector<float> query_emb;
             char* pos = const_cast<char*>(line.c_str() + 1);
-            auto& set = box_ptr->query_emb_set_q.back();
+            auto& set = box_ptr->gpu_replica_cache.back();
             for (int i = 0; i < set.emb_dim; ++i) {
               float feasign = strtof(pos, &pos);
               query_emb.push_back(feasign);
             }
-            query_emb_offset = set.AddEmb(query_emb);
+            query_emb_offset = set.AddGpuCache(query_emb);
             return;
           }
           if (ParseOneInstance(line, &record_vec[offset], query_emb_offset)) {

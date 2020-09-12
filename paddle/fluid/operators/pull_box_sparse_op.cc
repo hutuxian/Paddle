@@ -138,7 +138,7 @@ class PushCacheValuesOpMaker : public framework::SingleGradOpMaker<T> {
 
  protected:
   void Apply(GradOpPtr<T> op) const override {
-    op->SetType("push_box_query_emb");
+    op->SetType("push_cache_value");
     op->SetInput("Id", this->Input("Id"));
     op->SetInput(framework::GradVarName("Out"), this->OutputGrad("Out"));
     op->SetOutput(framework::GradVarName("Out"), this->OutputGrad("Out"));

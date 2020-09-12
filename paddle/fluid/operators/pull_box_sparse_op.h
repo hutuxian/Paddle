@@ -57,7 +57,7 @@ static void PullCacheValuesFunctor(const framework::ExecutionContext &ctx) {
   auto box_ptr = paddle::framework::BoxWrapper::GetInstance();
   int i = BOOST_GET_CONST(platform::CUDAPlace, ctx.GetPlace()).GetDeviceId();
 
-  box_ptr->query_emb_set_q.front().PullQueryEmb(input_data, output_data, batch_size, i);
+  box_ptr->gpu_replica_cache.front().PullCacheValue(input_data, output_data, batch_size, i);
 #endif
 }
 
