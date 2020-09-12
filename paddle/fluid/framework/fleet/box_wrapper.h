@@ -159,7 +159,7 @@ public:
     }
   }
 
-  void PullQueryEmb(uint64_t* d_keys, float* d_vals, int num, int gpu_id);
+  void PullCacheValue(uint64_t* d_keys, float* d_vals, int num, int gpu_id);
 
   int emb_dim=0;
   int h_emb_count=0;
@@ -197,7 +197,7 @@ class BoxWrapper {
   };
 
  public:
-  std::deque<GpuReplicaCache> query_emb_set_q;
+  std::deque<GpuReplicaCache> gpu_replica_cache;
   virtual ~BoxWrapper() {
     if (file_manager_ != nullptr) {
       file_manager_->destory();

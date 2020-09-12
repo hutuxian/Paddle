@@ -340,20 +340,20 @@ void BasicAucCalculator::cuda_add_mask_data(
 }
 
 __global__
-void pull_query_emb_kernel(int len, int dim, uint64_t* key, float* val, float* table) {
+void pull_cache_value_kernel(int len, int dim, uint64_t* key, float* val, float* table) {
     CUDA_KERNEL_LOOP(i, len) {
         val[i] = table[key[i / dim] * dim + i % dim];
     }
 }
 
-void GpuReplicaCache::PullQueryEmb(uint64_t* d_keys, float* d_vals, int num, int gpu_id) {
+void GpuReplicaCache::PullCacheValue(uint64_t* d_keys, float* d_vals, int num, int gpu_id) {
   auto place = platform::CUDAPlace(gpu_id);
   auto stream = dynamic_cast<platform::CUDADeviceContext*>(
                     platform::DeviceContextPool::Instance().Get(place))
                     ->stream();
   int len = emb_dim * num;
   const int BLOCK_SIZE_ = 256;
-  pull_query_emb_kernel<<<(len + BLOCK_SIZE_ - 1) / BLOCK_SIZE_, BLOCK_SIZE_, 0, stream>>>(len, emb_dim, d_keys, d_vals, d_embs[gpu_id]);
+  pull_cache_value_kernel<<<(len + BLOCK_SIZE_ - 1) / BLOCK_SIZE_, BLOCK_SIZE_, 0, stream>>>(len, emb_dim, d_keys, d_vals, d_embs[gpu_id]);
 }
 
 }  // end namespace framework

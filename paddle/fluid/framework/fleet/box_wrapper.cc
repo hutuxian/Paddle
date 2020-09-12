@@ -460,7 +460,7 @@ void BoxWrapper::BeginFeedPass(int date, boxps::PSAgentBase** agent) {
   if(FLAGS_use_gpu_replica_cache){
     int dim = BoxWrapper::embedx_dim_;
     std::cout << "query emb dim:" << dim << std::endl;
-    query_emb_set_q.emplace_back(dim); 
+    gpu_replica_cache.emplace_back(dim); 
   }
   PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
                                 "BeginFeedPass failed in BoxPS."));
@@ -468,8 +468,8 @@ void BoxWrapper::BeginFeedPass(int date, boxps::PSAgentBase** agent) {
 
 void BoxWrapper::EndFeedPass(boxps::PSAgentBase* agent) {
   if(FLAGS_use_gpu_replica_cache){
-    std::cout << "END FEED:" << query_emb_set_q.back().h_emb_count << " "<< query_emb_set_q.back().h_emb.size() << std::endl;
-    query_emb_set_q.back().to_hbm();
+    std::cout << "END FEED:" << gpu_replica_cache.back().h_emb_count << " "<< gpu_replica_cache.back().h_emb.size() << std::endl;
+    gpu_replica_cache.back().to_hbm();
   }
   int ret = boxps_ptr_->EndFeedPass(agent);
   PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
@@ -493,7 +493,7 @@ void BoxWrapper::SetTestMode(bool is_test) const {
 
 void BoxWrapper::EndPass(bool need_save_delta) {
   if(FLAGS_use_gpu_replica_cache){
-    query_emb_set_q.pop_front();
+    gpu_replica_cache.pop_front();
   }
   int ret = boxps_ptr_->EndPass(need_save_delta);
   PADDLE_ENFORCE_EQ(
