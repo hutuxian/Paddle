@@ -989,7 +989,7 @@ class ISlotParser {
   virtual ~ISlotParser() {}
   virtual bool Init(const std::vector<AllSlotInfo>& slots) = 0;
   virtual bool ParseOneInstance(
-      const std::string& line,std::function<int(std::vector<float>&) > GetQueryIndexFunc, 
+      const std::string& line,std::function<int(std::vector<float>&) > GetGpuCacheIndexFunc, 
       std::function<void(std::vector<SlotRecord>&, int)> GetInsFunc) {
     return true;
   }

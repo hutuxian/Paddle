@@ -459,7 +459,7 @@ void BoxWrapper::BeginFeedPass(int date, boxps::PSAgentBase** agent) {
   int ret = boxps_ptr_->BeginFeedPass(date, *agent);
   if(FLAGS_use_gpu_replica_cache){
     int dim = BoxWrapper::embedx_dim_;
-    std::cout << "query emb dim:" << dim << std::endl;
+    std::cout << "gpu cache dim:" << dim << std::endl;
     gpu_replica_cache.emplace_back(dim); 
   }
   PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
