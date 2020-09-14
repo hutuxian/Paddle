@@ -1413,7 +1413,7 @@ class SlotPaddleBoxDataFeedWithGpuReplicaCache : public SlotPaddleBoxDataFeed {
  private:
   virtual void LoadIntoMemoryByLib(void);
   virtual void LoadIntoMemoryByCommand(void);
-  bool ParseOneInstance(const std::string& line, SlotRecord* rec, int query_emb_offset);
+  bool ParseOneInstance(const std::string& line, SlotRecord* rec, int gpu_cache_offset);
 };
 
 template <class AR, class T>

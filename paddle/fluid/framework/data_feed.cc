@@ -2734,8 +2734,8 @@ void SlotPaddleBoxDataFeedWithGpuReplicaCache::LoadIntoMemoryByLib(void) {
                  &from_pool_num, &filename](const std::string& line) {
       int old_offset = offset;
       if (!parser->ParseOneInstance(
-              line,[this, &set](std::vector<float>& query_emb) -> int {
-                        return set.AddGpuCache(query_emb);
+              line,[this, &set](std::vector<float>& gpu_cache) -> int {
+                        return set.AddGpuCache(gpu_cache);
                 },
                  [this, &offset, &record_vec, &max_fetch_num, &old_offset](
                         std::vector<SlotRecord>& vec, int num) {
@@ -2838,23 +2838,23 @@ void SlotPaddleBoxDataFeedWithGpuReplicaCache::LoadIntoMemoryByCommand(void) {
     SlotRecordPool().get(&record_vec, max_fetch_num);
 
     int offset = 0;
-    int query_emb_offset;
+    int gpu_cache_offset;
     auto box_ptr = paddle::framework::BoxWrapper::GetInstance();
     line_reader.read_file(
-        this->fp_.get(), [this, &record_vec, &offset, &max_fetch_num,&query_emb_offset, &box_ptr,
+        this->fp_.get(), [this, &record_vec, &offset, &max_fetch_num, &gpu_cache_offset, &box_ptr,
                           &filename](const std::string& line) {
           if (line[0] == '#') {
-            std::vector<float> query_emb;
+            std::vector<float> gpu_cache;
             char* pos = const_cast<char*>(line.c_str() + 1);
             auto& set = box_ptr->gpu_replica_cache.back();
             for (int i = 0; i < set.emb_dim; ++i) {
               float feasign = strtof(pos, &pos);
-              query_emb.push_back(feasign);
+              gpu_cache.push_back(feasign);
             }
-            query_emb_offset = set.AddGpuCache(query_emb);
+            gpu_cache_offset = set.AddGpuCache(gpu_cache);
             return;
           }
-          if (ParseOneInstance(line, &record_vec[offset], query_emb_offset)) {
+          if (ParseOneInstance(line, &record_vec[offset], gpu_cache_offset)) {
             ++offset;
           } else {
             LOG(WARNING) << "read file:[" << filename << "] item error, line:["
@@ -2886,7 +2886,7 @@ void SlotPaddleBoxDataFeedWithGpuReplicaCache::LoadIntoMemoryByCommand(void) {
 }
 
 bool SlotPaddleBoxDataFeedWithGpuReplicaCache::ParseOneInstance(const std::string& line,
-                                             SlotRecord* ins, int query_emb_offset) {
+                                             SlotRecord* ins, int gpu_cache_offset) {
   SlotRecord& rec = (*ins);
   // parse line
   const char* str = line.c_str();
@@ -2938,7 +2938,7 @@ bool SlotPaddleBoxDataFeedWithGpuReplicaCache::ParseOneInstance(const std::strin
     auto& info = all_slots_info_[i];
     if (i == 3) {
         auto& slot_fea = slot_uint64_feasigns[info.slot_value_idx];
-        uint64_t feasign = static_cast<uint64_t>(query_emb_offset);
+        uint64_t feasign = static_cast<uint64_t>(gpu_cache_offset);
         slot_fea.clear();
         slot_fea.push_back(feasign);
         ++uint64_total_slot_num;
