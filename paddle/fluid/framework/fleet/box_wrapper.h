@@ -819,7 +819,7 @@ class BoxWrapper {
   // box device cache
   DeviceBoxData* device_caches_ = nullptr;
   std::map<std::string, float> lr_map_;
- 
+
  public:
   static std::shared_ptr<boxps::PaddleShuffler> data_shuffle_;
 
