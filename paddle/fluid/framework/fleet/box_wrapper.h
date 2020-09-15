@@ -126,7 +126,7 @@ class BasicAucCalculator {
 };
 
 class GpuReplicaCache {
-public:
+ public:
   GpuReplicaCache(int dim) {
     emb_dim_ = dim;
   }
@@ -160,12 +160,13 @@ public:
   }
 
   void PullCacheValue(uint64_t* d_keys, float* d_vals, int num, int gpu_id);
-
   int emb_dim_ = 0;
+  std::vector<float*> d_embs_;
+
+ private:
   int h_emb_count_ = 0;
   std::mutex h_emb_mtx_;
   std::vector<float> h_emb_;
-  std::vector<float*> d_embs_;
 };
 
 class BoxWrapper {
