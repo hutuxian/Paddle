@@ -2847,7 +2847,7 @@ void SlotPaddleBoxDataFeedWithGpuReplicaCache::LoadIntoMemoryByCommand(void) {
             std::vector<float> gpu_cache;
             char* pos = const_cast<char*>(line.c_str() + 1);
             auto& set = box_ptr->gpu_replica_cache.back();
-            for (int i = 0; i < set.emb_dim; ++i) {
+            for (int i = 0; i < set.emb_dim_; ++i) {
               float feasign = strtof(pos, &pos);
               gpu_cache.push_back(feasign);
             }

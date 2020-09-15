@@ -351,9 +351,9 @@ void GpuReplicaCache::PullCacheValue(uint64_t* d_keys, float* d_vals, int num, i
   auto stream = dynamic_cast<platform::CUDADeviceContext*>(
                     platform::DeviceContextPool::Instance().Get(place))
                     ->stream();
-  int len = emb_dim * num;
+  int len = emb_dim_ * num;
   const int BLOCK_SIZE_ = 256;
-  pull_cache_value_kernel<<<(len + BLOCK_SIZE_ - 1) / BLOCK_SIZE_, BLOCK_SIZE_, 0, stream>>>(len, emb_dim, d_keys, d_vals, d_embs_[gpu_id]);
+  pull_cache_value_kernel<<<(len + BLOCK_SIZE_ - 1) / BLOCK_SIZE_, BLOCK_SIZE_, 0, stream>>>(len, emb_dim_, d_keys, d_vals, d_embs_[gpu_id]);
 }
 
 }  // end namespace framework
