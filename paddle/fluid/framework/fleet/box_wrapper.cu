@@ -353,7 +353,7 @@ void GpuReplicaCache::PullCacheValue(uint64_t* d_keys, float* d_vals, int num, i
                     ->stream();
   int len = emb_dim * num;
   const int BLOCK_SIZE_ = 256;
-  pull_cache_value_kernel<<<(len + BLOCK_SIZE_ - 1) / BLOCK_SIZE_, BLOCK_SIZE_, 0, stream>>>(len, emb_dim, d_keys, d_vals, d_embs[gpu_id]);
+  pull_cache_value_kernel<<<(len + BLOCK_SIZE_ - 1) / BLOCK_SIZE_, BLOCK_SIZE_, 0, stream>>>(len, emb_dim, d_keys, d_vals, d_embs_[gpu_id]);
 }
 
 }  // end namespace framework

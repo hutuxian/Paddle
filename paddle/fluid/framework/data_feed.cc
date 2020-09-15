@@ -2735,7 +2735,7 @@ void SlotPaddleBoxDataFeedWithGpuReplicaCache::LoadIntoMemoryByLib(void) {
       int old_offset = offset;
       if (!parser->ParseOneInstance(
               line,[this, &set](std::vector<float>& gpu_cache) -> int {
-                        return set.AddGpuCache(gpu_cache);
+                        return set.AddItems(gpu_cache);
                 },
                  [this, &offset, &record_vec, &max_fetch_num, &old_offset](
                         std::vector<SlotRecord>& vec, int num) {
@@ -2851,7 +2851,7 @@ void SlotPaddleBoxDataFeedWithGpuReplicaCache::LoadIntoMemoryByCommand(void) {
               float feasign = strtof(pos, &pos);
               gpu_cache.push_back(feasign);
             }
-            gpu_cache_offset = set.AddGpuCache(gpu_cache);
+            gpu_cache_offset = set.AddItems(gpu_cache);
             return;
           }
           if (ParseOneInstance(line, &record_vec[offset], gpu_cache_offset)) {

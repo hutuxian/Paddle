@@ -132,11 +132,11 @@ public:
   }
 
   ~GpuReplicaCache() {
-    for (size_t i = 0; i < d_embs.size(); ++i) {
-      cudaFree(d_embs[i]);
+    for (size_t i = 0; i < d_embs_.size(); ++i) {
+      cudaFree(d_embs_[i]);
     }
   }
-  int AddGpuCache(std::vector<float>& emb) {
+  int AddItems(std::vector<float>& emb) {
     int r;
     h_emb_mtx.lock();
     h_emb.insert(h_emb.end(), emb.begin(), emb.end());
@@ -146,16 +146,16 @@ public:
     return r;
   }
 
-  void to_hbm() {
+  void ToHBM() {
     for (int i = 0; i < 8; ++i) {
-      d_embs.push_back(NULL);
+      d_embs_.push_back(NULL);
       cudaSetDevice(i);
-      cudaMalloc(&d_embs.back(), h_emb_count * emb_dim * sizeof(float));
+      cudaMalloc(&d_embs_.back(), h_emb_count * emb_dim * sizeof(float));
       auto place = platform::CUDAPlace(i);
       auto stream = dynamic_cast<platform::CUDADeviceContext*>(
                     platform::DeviceContextPool::Instance().Get(place))
                     ->stream();
-      cudaMemcpyAsync(d_embs.back(), h_emb.data(), h_emb_count * emb_dim * sizeof(float), cudaMemcpyHostToDevice, stream);
+      cudaMemcpyAsync(d_embs_.back(), h_emb.data(), h_emb_count * emb_dim * sizeof(float), cudaMemcpyHostToDevice, stream);
     }
   }
 
@@ -165,8 +165,7 @@ public:
   int h_emb_count=0;
   std::mutex h_emb_mtx;
   std::vector<float> h_emb;
-  std::vector<float*> d_embs;
-
+  std::vector<float*> d_embs_;
 };
 
 class BoxWrapper {
@@ -819,6 +818,7 @@ class BoxWrapper {
   // box device cache
   DeviceBoxData* device_caches_ = nullptr;
   std::map<std::string, float> lr_map_;
+ 
  public:
   static std::shared_ptr<boxps::PaddleShuffler> data_shuffle_;
 

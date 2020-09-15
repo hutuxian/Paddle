@@ -459,7 +459,7 @@ void BoxWrapper::BeginFeedPass(int date, boxps::PSAgentBase** agent) {
   int ret = boxps_ptr_->BeginFeedPass(date, *agent);
   if(FLAGS_use_gpu_replica_cache){
     int dim = BoxWrapper::embedx_dim_;
-    std::cout << "gpu cache dim:" << dim << std::endl;
+    VLOG(3) << "gpu cache dim:" << dim;
     gpu_replica_cache.emplace_back(dim); 
   }
   PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
@@ -468,8 +468,7 @@ void BoxWrapper::BeginFeedPass(int date, boxps::PSAgentBase** agent) {
 
 void BoxWrapper::EndFeedPass(boxps::PSAgentBase* agent) {
   if(FLAGS_use_gpu_replica_cache){
-    std::cout << "END FEED:" << gpu_replica_cache.back().h_emb_count << " "<< gpu_replica_cache.back().h_emb.size() << std::endl;
-    gpu_replica_cache.back().to_hbm();
+    gpu_replica_cache.back().ToHBM();
   }
   int ret = boxps_ptr_->EndFeedPass(agent);
   PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
