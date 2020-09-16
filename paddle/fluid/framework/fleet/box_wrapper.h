@@ -147,8 +147,8 @@ class GpuReplicaCache {
   }
 
   void ToHBM() {
-    int gpu_num_ = platform::GetCUDADeviceCount();
-    for (int i = 0; i < gpu_num_; ++i) {
+    int gpu_num = platform::GetCUDADeviceCount();
+    for (int i = 0; i < gpu_num; ++i) {
       d_embs_.push_back(NULL);
       cudaSetDevice(i);
       cudaMalloc(&d_embs_.back(), h_emb_count_ * emb_dim_ * sizeof(float));
