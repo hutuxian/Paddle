@@ -129,7 +129,11 @@ class GpuReplicaCache {
  public:
   GpuReplicaCache(int dim) {
     emb_dim_ = dim;
+<<<<<<< HEAD
     gpu_num_ = platform::GetCUDADeviceCount();
+=======
+    cudaGetDeviceCount(&gpu_count_);
+>>>>>>> 931efb241e23365ef6ff87deb553cb7b86a9fc68
   }
 
   ~GpuReplicaCache() {
@@ -148,7 +152,11 @@ class GpuReplicaCache {
   }
 
   void ToHBM() {
+<<<<<<< HEAD
     for (int i = 0; i < gpu_num_; ++i) {
+=======
+    for (int i = 0; i < gpu_count_; ++i) {
+>>>>>>> 931efb241e23365ef6ff87deb553cb7b86a9fc68
       d_embs_.push_back(NULL);
       cudaSetDevice(i);
       cudaMalloc(&d_embs_.back(), h_emb_count_ * emb_dim_ * sizeof(float));
@@ -165,7 +173,11 @@ class GpuReplicaCache {
   std::vector<float*> d_embs_;
 
  private:
+<<<<<<< HEAD
   int gpu_num_;
+=======
+  int gpu_count_;
+>>>>>>> 931efb241e23365ef6ff87deb553cb7b86a9fc68
   int h_emb_count_ = 0;
   std::mutex h_emb_mtx_;
   std::vector<float> h_emb_;
