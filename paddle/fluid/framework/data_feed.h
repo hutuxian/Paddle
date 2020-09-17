@@ -1335,7 +1335,7 @@ class SlotPaddleBoxDataFeed : public DataFeed {
   virtual int GetCurrentPhase();
   virtual void LoadIntoMemory();
 
- private:
+ protected:
   virtual void LoadIntoMemoryByCommand(void);
   virtual void LoadIntoMemoryByLib(void);
   void PutToFeedPvVec(const SlotPvInstance* pvs, int num);
