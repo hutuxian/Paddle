@@ -50,16 +50,10 @@ class TestBatchFCOp(OpTest):
         self.config()
         self.input = np.random.random(
             (self.ins_num, self.in_feat * self.batchcount)).astype(self.dtype)
-        #self.input = np.ones((self.ins_num, self.in_feat * self.batchcount)).astype(self.dtype)
-        #self.input = np.array(list(range(self.ins_num * self.in_feat * self.batchcount))).reshape([self.ins_num, self.in_feat * self.batchcount]).astype(self.dtype)
-        #print(self.input)
-        #self.input = np.ones((self.ins_num, self.in_feat * self.batchcount)).astype(self.dtype)
         self.w = np.random.random(
             (self.in_feat, self.out_feat * self.batchcount)).astype(self.dtype)
-        #self.w = np.ones((self.in_feat, self.out_feat * self.batchcount)).astype(self.dtype)
         self.bias = np.random.random(
             (1, self.out_feat * self.batchcount)).astype(self.dtype)
-        #self.bias = np.zeros((1,self.out_feat * self.batchcount)).astype(self.dtype)
         self.op_type = "batch_fc"
         np_out = np_cal_batchfc(self.input, self.w, self.bias, self.batchcount)
         np_out = np_out.astype(self.dtype)
@@ -75,44 +69,6 @@ class TestBatchFCOp(OpTest):
         if core.is_compiled_with_cuda():
             self.check_grad_with_place(
                 core.CUDAPlace(0), ["Bias", "W", "Input"], "Out")
-            #core.CUDAPlace(0), ["Bias", "Input"], "Out")
-            #core.CUDAPlace(0), ["Bias", "Input"], "Out")
-
-        #class TestBatchFCOp1(OpTest):
-        #    def config(self):
-        #        self.slot_pairs_num = 10
-        #        self.batch_size = 5
-        #        self.in_dim = 10
-        #        self.out_dim = 12
-        #        self.dtype = "float64"
-        #
-        #    def setUp(self):
-        #        self.config()
-        #        self.input = np.random.random((self.slot_pairs_num, self.batch_size,
-        #                                       self.in_dim)).astype(self.dtype)
-        #        self.w = np.random.random((self.slot_pairs_num, self.in_dim,
-        #                                   self.out_dim)).astype(self.dtype)
-        #        self.bias = np.random.random((self.slot_pairs_num,
-        #                                      self.out_dim)).astype(self.dtype)
-        #        self.op_type = "batch_fc"
-        #        np_out = np_cal_batchfc(self.input, self.w, self.bias)
-        #        np_out = np_out.astype(self.dtype)
-        #        self.inputs = {"Input": self.input, "W": self.w, "Bias": self.bias}
-        #        self.outputs = {"Out": np_out}
-        #
-        #    def test_check_output_cpu(self):
-        #        try:
-        #            self.check_output_with_place(place=core.CPUPlace())
-        #        except:
-        #            print("do not support cpu test, skip")
-        #
-        #    def test_check_grad_cpu(self):
-        #        try:
-        #            self.check_grad_with_place(core.CPUPlace(), ["Bias", "W", "Input"],
-        #                                       "Out")
-        #        except:
-        #            print("do not support cpu test, skip")
-        #
 
 
 if __name__ == "__main__":
