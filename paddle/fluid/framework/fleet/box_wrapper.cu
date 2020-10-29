@@ -241,6 +241,7 @@ void BoxWrapper::CopyForPull(const paddle::platform::Place& place,
     EMBEDX_CASE(16, EXPAND_EMBED_PULL_CASE(0););
     EMBEDX_CASE(256, EXPAND_EMBED_PULL_CASE(0););
     EMBEDX_CASE(128, EXPAND_EMBED_PULL_CASE(0););
+    EMBEDX_CASE(280, EXPAND_EMBED_PULL_CASE(0););
     default:
       PADDLE_THROW(platform::errors::InvalidArgument(
           "Unsupport this embedding size [%d]", hidden_size - 3));
@@ -305,6 +306,7 @@ void BoxWrapper::CopyForPush(const paddle::platform::Place& place,
     EMBEDX_CASE(16, EXPAND_EMBED_PUSH_CASE(0););
     EMBEDX_CASE(256, EXPAND_EMBED_PUSH_CASE(0););
     EMBEDX_CASE(128, EXPAND_EMBED_PUSH_CASE(0););
+    EMBEDX_CASE(280, EXPAND_EMBED_PUSH_CASE(0););
     default:
       PADDLE_THROW(platform::errors::InvalidArgument(
           "Unsupport this embedding size [%d]", hidden_size - 3));

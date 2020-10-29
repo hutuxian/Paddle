@@ -394,7 +394,7 @@ class BoxWrapper {
   static std::shared_ptr<BoxWrapper> SetInstance(int embedx_dim = 8,
                                                  int expand_embed_dim = 0,
                                                  bool is_quant = false,
-                                                 float pull_embedx_scale = 1.0) {
+                                                 float pull_embedx_scale = 1.0, int gpu_replica_cache_dim = 8) {
     if (nullptr == s_instance_) {
       // If main thread is guaranteed to init this, this lock can be removed
       static std::mutex mutex;
@@ -405,10 +405,10 @@ class BoxWrapper {
         s_instance_->boxps_ptr_.reset(
             boxps::BoxPSBase::GetIns(embedx_dim, expand_embed_dim));
         embedx_dim_ = embedx_dim;
+        gpu_replica_cache_dim_ = gpu_replica_cache_dim;
         expand_embed_dim_ = expand_embed_dim;
         is_quant_ = is_quant;
         pull_embedx_scale_ = pull_embedx_scale;
-
         if (boxps::MPICluster::Ins().size() > 1) {
           data_shuffle_.reset(boxps::PaddleShuffler::New());
           data_shuffle_->init(10);
@@ -844,7 +844,7 @@ class BoxWrapper {
   static int expand_embed_dim_;
   static bool is_quant_;
   static float pull_embedx_scale_;
-
+  static int gpu_replica_cache_dim_;
   // Metric Related
   int phase_ = 1;
   int phase_num_ = 2;
