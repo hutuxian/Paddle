@@ -485,3 +485,5 @@ DEFINE_int32(padbox_slotpool_thread_num, 1,
              "PadBoxSlotDataset slot pool thread num");
 DEFINE_bool(use_gpu_replica_cache, false,
             "if true ,will open use_gpu_replica_cache");
+DEFINE_int32(gpu_replica_cache_dim, 8,
+            "use_gpu_replica_cache,the dim");

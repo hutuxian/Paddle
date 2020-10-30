@@ -22,7 +22,7 @@
 #include "paddle/fluid/platform/gpu_info.h"
 
 DECLARE_bool(use_gpu_replica_cache);
-
+DECLARE_int32(gpu_replica_cache_dim);
 namespace paddle {
 namespace framework {
 
@@ -33,7 +33,6 @@ int BoxWrapper::embedx_dim_ = 8;
 int BoxWrapper::expand_embed_dim_ = 0;
 bool BoxWrapper::is_quant_ = false;
 float BoxWrapper::pull_embedx_scale_ = 1.0;
-int BoxWrapper::gpu_replica_cache_dim_ = 8;
 
 void BasicAucCalculator::add_unlock_data(double pred, int label) {
   PADDLE_ENFORCE_GE(pred, 0.0, platform::errors::PreconditionNotMet(
@@ -470,7 +469,7 @@ void BoxWrapper::FeedPass(int date,
 void BoxWrapper::BeginFeedPass(int date, boxps::PSAgentBase** agent) {
   int ret = boxps_ptr_->BeginFeedPass(date, *agent);
   if(FLAGS_use_gpu_replica_cache){
-    int dim = BoxWrapper::gpu_replica_cache_dim_;
+    int dim = FLAGS_gpu_replica_cache_dim;
     VLOG(3) << "gpu cache dim:" << dim;
     gpu_replica_cache.emplace_back(dim); 
   }
