@@ -52,14 +52,15 @@ def gen_input_help(input, rank_offset, max_rank, max_size):
     return input_help, ins_rank
 
 
-def gen_param_help(input, rank_offset, param, max_rank):
+def gen_param_help(input, rank_offset, param, max_rank, max_size):
     input_row, input_col = input.shape
     rank_offset_row, rank_offset_col = rank_offset.shape
     param_row, param_col = param.shape
 
     block_matrix_row = input_col * max_rank
+    max_ins = np.max((max_size, input_row))
 
-    output_param_row = block_matrix_row * input_row
+    output_param_row = max_ins * block_matrix_row
     output_param_col = param_col
 
     output_param = np.zeros((output_param_row * output_param_col, ))
@@ -68,6 +69,8 @@ def gen_param_help(input, rank_offset, param, max_rank):
         output_col_idx = idx % output_param_col
         output_row_idx = int(idx / output_param_col)
         ins_idx = int(output_row_idx / block_matrix_row)
+        if ins_idx >= rank_offset_row:
+            continue
         start_offset = output_row_idx % block_matrix_row
         k = int(start_offset / input_col)
         k_offset = start_offset % input_col
@@ -95,7 +98,7 @@ def np_rank_attention(input, rank_offset, rank_para, max_rank, max_size):
 
     input_help, ins_rank = gen_input_help(input, rank_offset, max_rank,
                                           max_size)
-    param_help = gen_param_help(input, rank_offset, rank_para, max_rank)
+    param_help = gen_param_help(input, rank_offset, rank_para, max_rank, max_size)
     block_matrix_row = input_col * max_rank
 
     res = np.zeros((input_row, rank_para_col))
@@ -159,19 +162,22 @@ class TestRankAttentionOpComplex(OpTest):
         rank_para_shape = [
             self.max_rank * self.max_rank * self.x_feat, self.y_feat
         ]
+        input_row, input_col = input.shape
+        max_size = input_row
         rank_para = np.random.random(rank_para_shape).astype(self.dtype)
         np_out, np_input_help, np_param_help, np_ins_rank = np_rank_attention(
             input,
-            np.array(rank_offset), rank_para, self.max_rank, self.pv_num * 7)
+            np.array(rank_offset), rank_para, self.max_rank, max_size)
         self.inputs = {
             "X": input,
             "RankOffset": np.array(rank_offset).astype("int32"),
             "RankParam": rank_para
         }
-        self.attrs = {'MaxRank': self.max_rank, 'MaxSize': self.pv_num * 7}
+        self.attrs = {'MaxRank': self.max_rank, 'MaxSize': max_size}
         self.outputs = {
             "Out": np_out,
             "InputHelp": np_input_help,
+            "ParamHelp": np_param_help,
             "InsRank": np_ins_rank
         }
 
@@ -213,6 +219,7 @@ class TestRankAttentionOpCpu(OpTest):
         self.outputs = {
             "Out": np_out,
             "InputHelp": np_input_help,
+            "ParamHelp": np_param_help,
             "InsRank": np_ins_rank
         }
 

@@ -44,6 +44,7 @@ __global__ void expand_input_by_rank_kernel(
     }
 
     if (rank_offset[output_row_idx * rank_offset_col] - 1 < 0 || faster < 0) {
+      output[idx] = 0;
       continue;
     }
 
@@ -87,6 +88,7 @@ __global__ void expand_rank_attention_param_kernel(
     int faster = rank_offset[2 * k + 1 + rank_offset_col * ins_idx] - 1;
 
     if (lower < 0 || faster < 0) {
+      output_param[idx] = 0;
       continue;
     }
     int start = lower * max_rank + faster;

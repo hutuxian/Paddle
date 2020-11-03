@@ -43,6 +43,10 @@ class RankAttentionOp : public framework::OperatorWithKernel {
         platform::errors::InvalidArgument(
             "Output(InputHelp) of RankAttentionOp should not be null."));
     PADDLE_ENFORCE_EQ(
+        ctx->HasOutput("ParamHelp"), true,
+        platform::errors::InvalidArgument(
+            "Output(ParamHelp) of RankAttentionOp should not be null."));
+    PADDLE_ENFORCE_EQ(
         ctx->HasOutput("Out"), true,
         platform::errors::InvalidArgument(
             "Output(Out) of RankAttentionOp should not be null."));
@@ -62,6 +66,7 @@ class RankAttentionOp : public framework::OperatorWithKernel {
 
     ctx->SetOutputDim("Out", {ins_num, para_col});
     ctx->SetOutputDim("InputHelp", {ins_num, block_matrix_row});
+    ctx->SetOutputDim("ParamHelp", {ins_num * block_matrix_row, para_col});
     ctx->SetOutputDim("InsRank", {ins_num, 1});
     ctx->ShareLoD("X", /*->*/ "Out");
   }
@@ -118,6 +123,8 @@ class RankAttentionOpMaker : public framework::OpProtoAndCheckerMaker {
     AddInput("RankParam",
              "(Tensor) Input tensor of rank_attention_Op operator.");
     AddOutput("InputHelp", "Output tensor of rank_attention_Op operator.")
+        .AsDispensable();
+    AddOutput("ParamHelp", "Output tensor of rank_attention_Op operator.")
         .AsDispensable();
     AddOutput("Out", "Output tensor of rank_attention_Op operator.");
     AddOutput("InsRank", "Output tensor of rank_attention_Op operator.")
