@@ -1168,3 +1168,50 @@ class PadBoxSlotDataset(BoxPSDataset):
         """
         self._prepare_to_run()
         self.boxps.read_ins_into_memory()
+
+
+class InputTableDataset(PadBoxSlotDataset):
+    def __init__(self):
+        """
+        InputTableDataset: derived from PadBoxSlotDataset.
+
+        Examples:
+            .. code-block:: python
+
+            import paddle.fluid as fluid
+            dataset = fluid.DatasetFactory().create_dataset("InputTableDataset")
+        """
+        self.proto_desc = data_feed_pb2.DataFeedDesc()
+        self.proto_desc.pipe_command = "cat"
+        self.dataset = core.Dataset("InputTableDataset")
+        self.thread_num = 1
+        self.filelist = []
+        self.boxps = core.BoxPS(self.dataset)
+        self.proto_desc.name = "InputTableDataFeed"
+        self.fleet_send_batch_size = None
+        self.is_user_set_queue_num = False
+        self.queue_num = None
+        self.parse_ins_id = False
+        self.parse_content = False
+        self.parse_logkey = False
+        self.merge_by_sid = True
+        self.enable_pv_merge = False
+        self.merge_by_lineid = False
+        self.fleet_send_sleep_seconds = None
+
+    def set_index_parser(self, index_parser):
+        """ set index parser
+        """
+        self.proto_desc.index_parser = index_parser
+
+    def set_index_filelist(self, filelist):
+        """ set index filelist
+        """
+        self.dataset.set_index_filelist(filelist)
+
+    def set_feed_type(self, data_feed_type):
+        """
+        Set data_feed_desc
+        """
+        assert data_feed_type == 'InputTableDataFeed', 'InputTableDataset must use InputTableDataFeed'
+        self.proto_desc.name = data_feed_type

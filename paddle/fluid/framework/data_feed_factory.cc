@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/framework/data_feed_factory.h"
+
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -68,6 +69,8 @@ REGISTER_DATAFEED_CLASS(PaddleBoxDataFeed);
 REGISTER_DATAFEED_CLASS(SlotPaddleBoxDataFeedWithGpuReplicaCache);
 #ifdef PADDLE_WITH_BOX_PS
 REGISTER_DATAFEED_CLASS(SlotPaddleBoxDataFeed);
+REGISTER_DATAFEED_CLASS(InputTableDataFeed);
+REGISTER_DATAFEED_CLASS(InputIndexDataFeed);
 #endif
 #if defined(PADDLE_WITH_CUDA) && !defined(_WIN32)
 REGISTER_DATAFEED_CLASS(MultiSlotFileInstantDataFeed);

@@ -13,21 +13,22 @@
  *     limitations under the License. */
 
 #include "paddle/fluid/framework/data_set.h"
+
 #include <algorithm>
 #include <random>
 #include <unordered_map>
 #include <unordered_set>
+
 #include "google/protobuf/io/zero_copy_stream_impl.h"
 #include "google/protobuf/message.h"
 #include "google/protobuf/text_format.h"
 #include "paddle/fluid/framework/data_feed_factory.h"
+#include "paddle/fluid/framework/fleet/box_wrapper.h"
 #include "paddle/fluid/framework/fleet/fleet_wrapper.h"
 #include "paddle/fluid/framework/io/fs.h"
 #include "paddle/fluid/platform/monitor.h"
 #include "paddle/fluid/platform/timer.h"
 #include "xxhash.h"  // NOLINT
-
-#include "paddle/fluid/framework/fleet/box_wrapper.h"
 
 #if defined _WIN32 || defined __APPLE__
 #else
@@ -2045,6 +2046,102 @@ void PadBoxSlotDataset::PrepareTrain(void) {
     }
   }
 }
+
+void InputTableDataset::LoadIntoMemory() {
+  VLOG(3) << "InputTableDataset<T>::LoadIntoMemory() begin";
+
+  platform::Timer timer;
+  timer.Start();
+  LoadIndexIntoMemory();
+  timer.Pause();
+  VLOG(1) << "load index into memory cost: " << timer.ElapsedSec();
+
+  platform::Timer timeline;
+  timeline.Start();
+  std::vector<std::thread> load_threads;
+  std::vector<std::thread> shuffle_threads;
+
+  if (mpi_size_ > 1) {
+    finished_counter_ = mpi_size_;
+    mpi_flags_.assign(mpi_size_, 1);
+    VLOG(3) << "RegisterClientToClientMsgHandler";
+    data_consumer_ = reinterpret_cast<void*>(new PadBoxSlotDataConsumer(this));
+    VLOG(3) << "RegisterClientToClientMsgHandler done";
+  }
+
+  std::atomic<int> ref(thread_num_);
+  for (int64_t i = 0; i < thread_num_; ++i) {
+    load_threads.push_back(std::thread([this, i, &ref]() {
+      SetCPUAffinity(i, false);
+      readers_[i]->LoadIntoMemory();
+      if (--ref == 0) {
+        input_channel_->Close();
+      }
+    }));
+  }
+
+  // dualbox global data shuffle
+  if (mpi_size_ > 1) {
+    ShuffleData(&shuffle_threads, shuffle_thread_num_);
+    MergeInsKeys(shuffle_channel_);
+  } else {
+    MergeInsKeys(input_channel_);
+  }
+
+  for (std::thread& t : load_threads) {
+    t.join();
+  }
+
+  if (!shuffle_threads.empty()) {
+    for (std::thread& t : shuffle_threads) {
+      t.join();
+    }
+  }
+
+  if (data_consumer_ != nullptr) {
+    delete reinterpret_cast<PadBoxSlotDataConsumer*>(data_consumer_);
+    data_consumer_ = nullptr;
+  }
+  //  shuffle_channel_->Clear();
+  //  input_channel_->Clear();
+
+  timeline.Pause();
+  VLOG(1) << "PadBoxSlotDataset::LoadIntoMemory() end"
+          << ", memory data size=" << input_records_.size()
+          << ", cost time=" << timeline.ElapsedSec() << " seconds";
+}
+
+void InputTableDataset::LoadIndexIntoMemory() {
+  VLOG(3) << "LoadIndexIntoMemory()";
+
+  std::vector<std::shared_ptr<paddle::framework::DataFeed>> readers;
+  size_t file_idx = 0;
+  std::mutex mutex_for_pick_file;
+
+  for (int i = 0; i < thread_num_; ++i) {
+    readers.push_back(DataFeedFactory::CreateDataFeed("InputIndexDataFeed"));
+    readers[i]->Init(data_feed_desc_);
+    readers[i]->SetThreadId(i);
+    readers[i]->SetFileListMutex(&mutex_for_pick_file);
+    readers[i]->SetFileListIndex(&file_idx);
+    readers[i]->SetFileList(index_filelist_);
+  }
+
+  std::vector<std::thread> threads;
+  for (int i = 0; i < thread_num_; ++i) {
+    threads.push_back(std::thread([i, &readers]() {
+      SetCPUAffinity(i, false);
+      readers[i]->LoadIntoMemory();
+    }));
+  }
+
+  for (auto& t : threads) {
+    t.join();
+  }
+
+  VLOG(3) << "end LoadIndexIntoMemory()";
+}
+
 #endif
 }  // end namespace framework
 }  // end namespace paddle

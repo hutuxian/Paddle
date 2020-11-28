@@ -23,6 +23,7 @@ limitations under the License. */
 #include <sys/wait.h>
 #endif
 #include <glog/logging.h>
+
 #include <algorithm>
 #include <atomic>
 #include <ctime>
@@ -33,8 +34,10 @@ limitations under the License. */
 #include <set>
 #include <string>
 #include <unordered_set>
+#include <unordered_map>
 #include <utility>
 #include <vector>
+
 #include "paddle/fluid/framework/data_feed.h"
 #include "paddle/fluid/framework/data_set.h"
 #include "paddle/fluid/framework/lod_tensor.h"
@@ -170,6 +173,64 @@ class GpuReplicaCache {
   std::vector<float> h_emb_;
 };
 
+class InputTable {
+ public:
+  explicit InputTable(uint64_t dim) : dim_(dim), miss_(0) {
+    // add default vec 0 => [0, 0, ...]
+    std::vector<float> vec(dim_, 0);
+    AddIndexData("-", vec);
+  }
+
+  void AddIndexData(const std::string& key, const std::vector<float>& vec) {
+    PADDLE_ENFORCE_EQ(vec.size(), dim_);
+
+    table_mutex_.lock();
+    key_offset_.emplace(key, table_.size());
+    table_.insert(table_.end(), vec.begin(), vec.end());
+    table_mutex_.unlock();
+  }
+
+  uint64_t GetIndexOffset(const std::string& key) {
+    auto it = key_offset_.find(key);
+    if (it == key_offset_.end()) {
+      ++miss_;
+      return 0;
+    }
+
+    return it->second;
+  }
+
+  void LookupInput(uint64_t* keys, float* values, uint64_t num,
+                   size_t device_id) {
+    std::vector<uint64_t> cpu_keys;
+    std::vector<float> cpu_values;
+    cpu_keys.resize(num);
+    cpu_values.resize(num * dim_);
+
+    cudaSetDevice(device_id);
+    cudaMemcpy(cpu_keys.data(), keys, cpu_keys.size() * sizeof(uint64_t),
+               cudaMemcpyDeviceToHost);
+    for (size_t i = 0; i < num; ++i) {
+      memcpy(&cpu_values[i * dim_], &table_[cpu_keys[i]], dim_ * sizeof(float));
+    }
+    cudaMemcpy(values, cpu_values.data(), cpu_values.size() * sizeof(float),
+               cudaMemcpyHostToDevice);
+  }
+
+  size_t size() const { return key_offset_.size(); }
+
+  size_t miss() const { return miss_; }
+
+  size_t dim() const { return dim_; }
+
+ protected:
+  uint64_t dim_;
+  std::mutex table_mutex_;
+  std::unordered_map<std::string, uint64_t> key_offset_;
+  std::vector<float> table_;
+  std::atomic<size_t> miss_;
+};
+
 class BoxWrapper {
   struct DeviceBoxData {
     LoDTensor keys_tensor;
@@ -204,6 +265,8 @@ class BoxWrapper {
 
  public:
   std::deque<GpuReplicaCache> gpu_replica_cache;
+  std::deque<InputTable> input_table_deque_;
+
   virtual ~BoxWrapper() {
     if (file_manager_ != nullptr) {
       file_manager_->destory();
@@ -226,7 +289,8 @@ class BoxWrapper {
     fprintf(stdout, "init box wrapper\n");
     boxps::MPICluster::Ins();
   }
-
+  void SetDatasetName(const std::string& name) { dataset_name_ = name; }
+  void SetInputTableDim(size_t dim) { input_table_dim_ = dim; }
   void FeedPass(int date, const std::vector<uint64_t>& feasgin_to_box);
   void BeginFeedPass(int date, boxps::PSAgentBase** agent);
   void EndFeedPass(boxps::PSAgentBase* agent);
@@ -370,8 +434,9 @@ class BoxWrapper {
     std::string ret_str;
     int ret = boxps_ptr_->SaveBase(batch_model_path, xbox_model_path, ret_str,
                                    seconds_from_1970 / 86400);
-    PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
-                                  "SaveBase failed in BoxPS."));
+    PADDLE_ENFORCE_EQ(
+        ret, 0,
+        platform::errors::PreconditionNotMet("SaveBase failed in BoxPS."));
     return ret_str;
   }
 
@@ -379,8 +444,9 @@ class BoxWrapper {
     VLOG(3) << "Begin SaveDelta";
     std::string ret_str;
     int ret = boxps_ptr_->SaveDelta(xbox_model_path, ret_str);
-    PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
-                                  "SaveDelta failed in BoxPS."));
+    PADDLE_ENFORCE_EQ(
+        ret, 0,
+        platform::errors::PreconditionNotMet("SaveDelta failed in BoxPS."));
     return ret_str;
   }
 
@@ -455,8 +521,9 @@ class BoxWrapper {
     std::string user = fs_ugi.substr(0, split);
     std::string pwd = fs_ugi.substr(split + 1);
     bool ret = file_manager_->initialize(fs_name, user, pwd, conf_path);
-    PADDLE_ENFORCE_EQ(ret, true, platform::errors::PreconditionNotMet(
-                                     "Called AFSAPI Init Interface Failed."));
+    PADDLE_ENFORCE_EQ(ret, true,
+                      platform::errors::PreconditionNotMet(
+                          "Called AFSAPI Init Interface Failed."));
     use_afs_api_ = true;
   }
 
@@ -861,6 +928,8 @@ class BoxWrapper {
   // box device cache
   DeviceBoxData* device_caches_ = nullptr;
   std::map<std::string, float> lr_map_;
+  std::string dataset_name_;
+  size_t input_table_dim_ = 0;
 
  public:
   static std::shared_ptr<boxps::PaddleShuffler> data_shuffle_;

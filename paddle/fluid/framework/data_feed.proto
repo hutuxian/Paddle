@@ -34,4 +34,5 @@ message DataFeedDesc {
   optional int32 pv_batch_size = 7 [ default = 32 ];
   optional int32 input_type = 8 [ default = 0 ];
   optional float sample_rate = 9 [ default = 1.0 ];
+  optional string index_parser = 10;
 }

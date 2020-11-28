@@ -13,10 +13,12 @@
 // limitations under the License.
 #ifdef PADDLE_WITH_BOX_PS
 #include "paddle/fluid/framework/fleet/box_wrapper.h"
+
 #include <algorithm>
 #include <ctime>
 #include <memory>
 #include <numeric>
+
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/platform/collective_helper.h"
 #include "paddle/fluid/platform/gpu_info.h"
@@ -35,10 +37,12 @@ int BoxWrapper::feature_type_ = 0;
 float BoxWrapper::pull_embedx_scale_ = 1.0;
 
 void BasicAucCalculator::add_unlock_data(double pred, int label) {
-  PADDLE_ENFORCE_GE(pred, 0.0, platform::errors::PreconditionNotMet(
-                                   "pred should be greater than 0"));
-  PADDLE_ENFORCE_LE(pred, 1.0, platform::errors::PreconditionNotMet(
-                                   "pred should be lower than 1"));
+  PADDLE_ENFORCE_GE(
+      pred, 0.0,
+      platform::errors::PreconditionNotMet("pred should be greater than 0"));
+  PADDLE_ENFORCE_LE(
+      pred, 1.0,
+      platform::errors::PreconditionNotMet("pred should be lower than 1"));
   PADDLE_ENFORCE_EQ(
       label * label, label,
       platform::errors::PreconditionNotMet(
@@ -464,8 +468,9 @@ void BasicAucCalculator::calculate_bucket_error() {
 void BoxWrapper::FeedPass(int date,
                           const std::vector<uint64_t>& feasgin_to_box) {
   int ret = boxps_ptr_->FeedPass(date, feasgin_to_box);
-  PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
-                                "FeedPass failed in BoxPS."));
+  PADDLE_ENFORCE_EQ(
+      ret, 0,
+      platform::errors::PreconditionNotMet("FeedPass failed in BoxPS."));
 }
 
 void BoxWrapper::BeginFeedPass(int date, boxps::PSAgentBase** agent) {
@@ -475,17 +480,27 @@ void BoxWrapper::BeginFeedPass(int date, boxps::PSAgentBase** agent) {
     VLOG(3) << "gpu cache dim:" << dim;
     gpu_replica_cache.emplace_back(dim);
   }
-  PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
-                                "BeginFeedPass failed in BoxPS."));
+  if (dataset_name_ == "InputTableDataset") {
+    VLOG(3) << "lookup input dim: " << input_table_dim_;
+    input_table_deque_.emplace_back(input_table_dim_);
+  }
+  PADDLE_ENFORCE_EQ(
+      ret, 0,
+      platform::errors::PreconditionNotMet("BeginFeedPass failed in BoxPS."));
 }
 
 void BoxWrapper::EndFeedPass(boxps::PSAgentBase* agent) {
   if (FLAGS_use_gpu_replica_cache) {
     gpu_replica_cache.back().ToHBM();
   }
+  if (dataset_name_ == "InputTableDataset") {
+    auto& t = input_table_deque_.back();
+    VLOG(3) << "input table size: " << t.size() << " miss: " << t.miss();
+  }
   int ret = boxps_ptr_->EndFeedPass(agent);
-  PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
-                                "EndFeedPass failed in BoxPS."));
+  PADDLE_ENFORCE_EQ(
+      ret, 0,
+      platform::errors::PreconditionNotMet("EndFeedPass failed in BoxPS."));
 }
 
 void BoxWrapper::BeginPass() {
@@ -495,8 +510,9 @@ void BoxWrapper::BeginPass() {
     dev.ResetTimer();
   }
   int ret = boxps_ptr_->BeginPass();
-  PADDLE_ENFORCE_EQ(ret, 0, platform::errors::PreconditionNotMet(
-                                "BeginPass failed in BoxPS."));
+  PADDLE_ENFORCE_EQ(
+      ret, 0,
+      platform::errors::PreconditionNotMet("BeginPass failed in BoxPS."));
 }
 
 void BoxWrapper::SetTestMode(bool is_test) const {
@@ -506,6 +522,9 @@ void BoxWrapper::SetTestMode(bool is_test) const {
 void BoxWrapper::EndPass(bool need_save_delta) {
   if (FLAGS_use_gpu_replica_cache) {
     gpu_replica_cache.pop_front();
+  }
+  if (dataset_name_ == "InputTableDataset") {
+    input_table_deque_.pop_front();
   }
   int ret = boxps_ptr_->EndPass(need_save_delta);
   PADDLE_ENFORCE_EQ(

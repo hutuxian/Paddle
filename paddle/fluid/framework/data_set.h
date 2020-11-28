@@ -15,6 +15,7 @@
 #pragma once
 
 #include <ThreadPool.h>
+
 #include <fstream>
 #include <memory>
 #include <mutex>  // NOLINT
@@ -48,6 +49,7 @@ class Dataset {
   virtual ~Dataset() {}
   // set file list
   virtual void SetFileList(const std::vector<std::string>& filelist) = 0;
+  virtual void SetIndexFileList(const std::vector<std::string>& filelist) {}
   // set readers' num
   virtual void SetThreadNum(int thread_num) = 0;
   // set workers' num
@@ -363,10 +365,10 @@ class PadBoxSlotDataset : public DatasetImpl<SlotRecord> {
  public:
   virtual void ReceiveSuffleData(const int client_id, const char* msg, int len);
 
- private:
+ protected:
   void MergeInsKeys(const Channel<SlotRecord>& in);
 
- private:
+ protected:
   Channel<SlotRecord> shuffle_channel_ = nullptr;
   std::vector<int> mpi_flags_;
   std::atomic<int> finished_counter_{0};
@@ -377,6 +379,19 @@ class PadBoxSlotDataset : public DatasetImpl<SlotRecord> {
   std::atomic<int> shuffle_counter_{0};
   void* data_consumer_ = nullptr;
   std::atomic<int> receiver_cnt_{0};
+};
+
+class InputTableDataset : public PadBoxSlotDataset {
+ public:
+  virtual void LoadIntoMemory();
+  virtual void SetIndexFileList(const std::vector<std::string>& filelist) {
+    index_filelist_ = filelist;
+  }
+
+ private:
+  void LoadIndexIntoMemory();
+
+  std::vector<std::string> index_filelist_;
 };
 #endif
 

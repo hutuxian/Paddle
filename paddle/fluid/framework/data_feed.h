@@ -1013,6 +1013,17 @@ class ISlotParser {
       std::function<void(std::vector<SlotRecord>&, int)> GetInsFunc) {
     return true;
   }
+  virtual bool ParseOneInstance(
+      const std::string& line,
+      std::function<uint64_t(std::string&)> GetOffsetFunc,
+      std::function<void(std::vector<SlotRecord>&, int)> GetInsFunc) {
+    return true;
+  }
+  virtual bool ParseIndexData(
+      const std::string& line,
+      std::function<void(std::string&, std::vector<float>&)> AddIndexDataFunc) {
+    return true;
+  }
 };
 struct UsedSlotInfo {
   int idx;
@@ -1454,6 +1465,39 @@ class SlotPaddleBoxDataFeedWithGpuReplicaCache : public SlotPaddleBoxDataFeed {
   virtual void LoadIntoMemoryByCommand(void);
   bool ParseOneInstance(const std::string& line, SlotRecord* rec,
                         int gpu_cache_offset);
+};
+
+class InputTableDataFeed : public SlotPaddleBoxDataFeed {
+ protected:
+  virtual void LoadIntoMemoryByCommand(void) {
+    PADDLE_THROW(
+        "InputTableDataFeed is not implemented LoadIntoMemoryByCommand");
+  }
+  virtual void LoadIntoMemoryByLib(void);
+};
+
+class InputIndexDataFeed : public DataFeed {
+ public:
+  void Init(const DataFeedDesc& data_feed_desc) override {
+    pipe_command_ = data_feed_desc.index_parser();
+    parser_so_path_ = paddle::string::erase_spaces(pipe_command_);
+    VLOG(3) << "InputIndexDataFeed parser: " << parser_so_path_;
+
+    size_t pos = pipe_command_.find(".so");
+    CHECK(pos != std::string::npos);
+    pipe_command_.clear();
+
+    finish_init_ = true;
+  }
+  bool Start() override { return true; }
+  int Next() override { return 0; }
+  void SetThreadId(int thread_id) { thread_id_ = thread_id; }
+  void LoadIntoMemory() override;
+
+ protected:
+  int thread_id_ = 0;
+  std::string parser_so_path_;
+  std::shared_ptr<FILE> fp_ = nullptr;
 };
 
 template <class AR, class T>

@@ -45,6 +45,14 @@ class PullCacheValuesCUDAKernel: public framework::OpKernel<T> {
   }
 };
 
+template <typename T>
+class LookupInputCUDAKernel: public framework::OpKernel<T> {
+ public:
+  void Compute(const framework::ExecutionContext &ctx) const override {
+    LookupInputFunctor<T>(ctx);
+  }
+};
+
 }  // namespace operators
 }  // namespace paddle
 
@@ -52,3 +60,4 @@ namespace ops = paddle::operators;
 REGISTER_OP_CUDA_KERNEL(pull_box_sparse, ops::PullBoxSparseCUDAKernel<float>)
 REGISTER_OP_CUDA_KERNEL(push_box_sparse, ops::PushBoxSparseCUDAKernel<float>)
 REGISTER_OP_CUDA_KERNEL(pull_cache_value, ops::PullCacheValuesCUDAKernel<float>)
+REGISTER_OP_CUDA_KERNEL(lookup_input, ops::LookupInputCUDAKernel<float>)

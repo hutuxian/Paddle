@@ -647,6 +647,7 @@ def _pull_sparse_v2(input,
         return outs[0]
     return outs
 
+
 def _pull_cache_value(input, size, dtype='float32'):
     """
     **Pull Box Sparse Layer**
@@ -659,6 +660,7 @@ def _pull_cache_value(input, size, dtype='float32'):
         outputs={'Out': [out]},
         attrs={'size': size})
     return out
+
 
 def _pull_box_sparse(input, size, dtype='float32'):
     """
@@ -706,6 +708,20 @@ def _pull_box_sparse(input, size, dtype='float32'):
     if len(outs) == 1:
         return outs[0]
     return outs
+
+
+def lookup_input(input, size):
+    """
+    lookup_input
+    """
+    helper = LayerHelper('lookup_input', **locals())
+    out = helper.create_variable_for_type_inference('float32')
+    helper.append_op(
+        type='lookup_input',
+        inputs={'Id': [input]},
+        outputs={'Out': [out]},
+        attrs={'size': size})
+    return out
 
 
 @templatedoc()
