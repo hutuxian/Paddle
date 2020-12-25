@@ -33,6 +33,11 @@ struct FcTypeTraits<double> {
   typedef double4 Type;
 };
 
+template <>
+struct FcTypeTraits<platform::float16> {
+  typedef half4 Type;
+};
+
 template <typename T, bool DoRelu>
 __global__ void bias_relu_v4(const int num, const T* bias, T* data, int K) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -127,6 +132,7 @@ class FCFunctor<platform::CUDADeviceContext, T> {
 
 template class FCFunctor<platform::CUDADeviceContext, float>;
 template class FCFunctor<platform::CUDADeviceContext, double>;
+template class FCFunctor<platform::CUDADeviceContext, platform::float16>;
 
 }  // namespace math
 }  // namespace operators
