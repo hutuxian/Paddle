@@ -307,7 +307,7 @@ class PD_INFER_DECL PaddlePredictor {
   /// This will save the IO copy for transfering inputs and outputs to predictor
   /// workspace
   /// and get some performance improvement.
-  /// To use it, one should call the AnalysisConfig.SwitchUseFeedFetchOp(true)
+  /// To use it, one should call the AnalysisConfig.SwitchUseFeedFetchOp(false)
   /// and then use the `GetInputTensor` and `GetOutputTensor`
   /// to directly write or read the input/output tensors.
   /// \return Whether the run is successful
@@ -318,6 +318,17 @@ class PD_INFER_DECL PaddlePredictor {
   ///
   ///
   virtual void ClearIntermediateTensor() {}
+
+  ///
+  /// \brief Release all tmp tensor to compress the size of the memory pool.
+  /// The memory pool is considered to be composed of a list of chunks, if
+  /// the chunk is not occupied, it can be released.
+  ///
+  /// \return Number of bytes released. It may be smaller than the actual
+  /// released memory, because part of the memory is not managed by the
+  /// MemoryPool.
+  ///
+  virtual uint64_t TryShrinkMemory() { return 0; }
 
   /// \brief Clone an existing predictor
   /// When using clone, the same network will be created,
@@ -438,5 +449,10 @@ PD_INFER_DECL int PaddleDtypeSize(PaddleDType dtype);
 PD_INFER_DECL std::string get_version();
 
 PD_INFER_DECL std::string UpdateDllFlag(const char* name, const char* value);
+
+#ifdef PADDLE_ON_INFERENCE
+PD_INFER_DECL std::shared_ptr<framework::Cipher> MakeCipher(
+    const std::string& config_file);
+#endif
 
 }  // namespace paddle

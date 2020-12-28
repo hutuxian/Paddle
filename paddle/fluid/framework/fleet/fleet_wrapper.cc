@@ -198,6 +198,7 @@ void FleetWrapper::HeterPullSparseVars(
   for (auto& t : fea_values) {
     pull_result_ptr.push_back(t.data());
   }
+  /*
   auto status = pslib_ptr_->_worker_ptr->heter_pull_sparse(
       workerid, pull_result_ptr.data(), table_id, fea_keys.data(),
       fea_keys.size(), task->taskid_);
@@ -211,15 +212,15 @@ void FleetWrapper::HeterPullSparseVars(
       exit(-1);
     }
   }
+  */
 }
 
 void FleetWrapper::HeterPushSparseVars(
-    std::shared_ptr<HeterTask> task, const uint64_t table_id,
-    const std::vector<std::string>& sparse_key_names,
+    std::shared_ptr<HeterTask> task, const Scope& scope,
+    const uint64_t table_id, const std::vector<std::string>& sparse_key_names,
     const std::vector<std::string>& sparse_grad_names, const int emb_dim,
     std::vector<::std::future<int32_t>>* push_sparse_status, const bool use_cvm,
     const bool dump_slot, const bool no_cvm) {
-  auto& scope = *(task->scope_);
   int batch_size = task->cur_batch_;
   int offset = 2;
   int slot_offset = 0;
@@ -360,6 +361,7 @@ int FleetWrapper::RegisterHeterCallback(HeterCallBackFunc handler) {
   VLOG(3) << "pslib_ptr_=" << pslib_ptr_;
   VLOG(3) << "_worker_ptr=" << pslib_ptr_->_worker_ptr;
   return pslib_ptr_->_worker_ptr->registe_heter_callback(handler);
+
 #else
   VLOG(0) << "FleetWrapper::RegisterHeterCallback"
           << " does nothing when no pslib";
@@ -751,7 +753,57 @@ void FleetWrapper::PushDenseVarsAsync(
     push_sparse_status->push_back(std::move(status));
   }
 }
+#endif
 
+#ifdef PADDLE_WITH_XPU
+void FleetWrapper::PushDenseVarsAsync(
+    const Scope& scope, const uint64_t table_id,
+    const std::vector<std::string>& var_names,
+    std::vector<::std::future<int32_t>>* push_sparse_status,
+    float scale_datanorm, int batch_size,
+    const paddle::platform::Place& place) {
+#ifdef PADDLE_WITH_PSLIB
+  std::vector<paddle::ps::Region> regions;
+  for (auto& t : var_names) {
+    Variable* var = scope.FindVar(t);
+    LoDTensor* tensor = var->GetMutable<LoDTensor>();
+    int count = tensor->numel();
+    float* g_data = tensor->data<float>();
+
+    Variable* pin_var = scope.FindVar(t + "pin");
+    LoDTensor* pin_tensor = pin_var->GetMutable<LoDTensor>();
+    float* pin_g =
+        pin_tensor->mutable_data<float>(tensor->dims(), platform::CPUPlace());
+    memory::Copy(platform::CPUPlace(), pin_g,
+                 BOOST_GET_CONST(platform::XPUPlace, place), g_data,
+                 sizeof(float) * count);
+
+    float* g = pin_g;
+    if (scale_datanorm >= 0) {
+      if (t.find(".batch_size@GRAD") != std::string::npos ||
+          t.find(".batch_sum@GRAD") != std::string::npos) {
+        Eigen::Map<Eigen::MatrixXf> mat(g, 1, count);
+        float scale = 1.0 / batch_size;
+        mat *= scale;
+      } else if (t.find(".batch_square_sum@GRAD") != std::string::npos) {
+        VLOG(3) << "epsilon: " << scale_datanorm;
+        for (int i = 0; i < count; ++i) {
+          g[i] = (g[i] - batch_size * scale_datanorm) / batch_size +
+                 batch_size * scale_datanorm;
+        }
+      }
+    }
+    paddle::ps::Region reg(g, count);
+    regions.emplace_back(std::move(reg));
+  }
+
+  auto status = pslib_ptr_->_worker_ptr->push_dense(regions.data(),
+                                                    regions.size(), table_id);
+  if (push_sparse_status) {
+    push_sparse_status->push_back(std::move(status));
+  }
+#endif
+}
 #endif
 void FleetWrapper::PushDenseVarsAsync(
     const Scope& scope, const uint64_t table_id,
@@ -1173,13 +1225,6 @@ void FleetWrapper::LoadModelOneTable(const uint64_t table_id,
 void FleetWrapper::LoadWithWhitelist(const uint64_t table_id,
                                      const std::string& path, const int mode) {
 #ifdef PADDLE_WITH_PSLIB
-  auto ret = pslib_ptr_->_worker_ptr->load_with_whitelist(table_id, path,
-                                                          std::to_string(mode));
-  ret.wait();
-  if (ret.get() != 0) {
-    LOG(ERROR) << "load model of table id: " << table_id
-               << ", from path: " << path << " failed";
-  }
 #else
   VLOG(0) << "FleetWrapper::LoadWhitelist does nothing when no pslib";
 #endif
@@ -1304,16 +1349,7 @@ int32_t FleetWrapper::SaveWithWhitelist(int table_id, const std::string& path,
                                         const int mode,
                                         const std::string& whitelist_path) {
 #ifdef PADDLE_WITH_PSLIB
-  auto ret = pslib_ptr_->_worker_ptr->save_with_whitelist(
-      table_id, path, std::to_string(mode), whitelist_path);
-  ret.wait();
-  int32_t feasign_cnt = ret.get();
-  if (feasign_cnt == -1) {
-    LOG(ERROR) << "table save cache failed";
-    sleep(sleep_seconds_before_fail_exit_);
-    exit(-1);
-  }
-  return feasign_cnt;
+  return 0;
 #else
   VLOG(0) << "FleetWrapper::SaveCache does nothing when no pslib";
   return -1;

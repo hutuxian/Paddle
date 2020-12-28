@@ -90,6 +90,8 @@ from .io import save, load, load_program_state, set_program_state
 from .dygraph.checkpoint import save_dygraph, load_dygraph
 from .dygraph.varbase_patch_methods import monkey_patch_varbase
 from . import generator
+from .core import _cuda_synchronize
+
 Tensor = LoDTensor
 enable_imperative = enable_dygraph
 disable_imperative = disable_dygraph
@@ -133,7 +135,8 @@ __all__ = framework.__all__ + executor.__all__ + \
         'install_check',
         'save',
         'load',
-        'VarBase'
+        'VarBase',
+        '_cuda_synchronize'
     ]
 
 
@@ -149,6 +152,9 @@ def __bootstrap__():
     import platform
     from . import core
 
+    # NOTE(zhiqiu): When (1)numpy < 1.19; (2) python < 3.7, 
+    # unittest is always imported in numpy (maybe some versions not). 
+    # so is_test is True and p2p is not inited.
     in_test = 'unittest' in sys.modules
 
     try:
@@ -197,6 +203,7 @@ def __bootstrap__():
         'free_when_no_cache_hit',
         'call_stack_level',
         'sort_sum_gradient',
+        'max_inplace_grad_add',
     ]
     if 'Darwin' not in sysstr:
         read_env_flags.append('use_pinned_memory')
@@ -206,25 +213,8 @@ def __bootstrap__():
 
     if core.is_compiled_with_mkldnn():
         read_env_flags.append('use_mkldnn')
-
-    if core.is_compiled_with_dist():
-        #env for rpc
-        read_env_flags.append('rpc_deadline')
-        read_env_flags.append('rpc_retry_times')
-        read_env_flags.append('rpc_server_profile_path')
-        read_env_flags.append('enable_rpc_profiler')
-        read_env_flags.append('rpc_send_thread_num')
-        read_env_flags.append('rpc_get_thread_num')
-        read_env_flags.append('rpc_prefetch_thread_num')
-        read_env_flags.append('rpc_disable_reuse_port')
-        read_env_flags.append('rpc_retry_bind_port')
-
-        read_env_flags.append('worker_update_interval_secs')
-
-        if core.is_compiled_with_brpc():
-            read_env_flags.append('max_body_size')
-            #set brpc max body size
-            os.environ['FLAGS_max_body_size'] = "2147483647"
+        read_env_flags.append('tracer_mkldnn_ops_on')
+        read_env_flags.append('tracer_mkldnn_ops_off')
 
     if core.is_compiled_with_cuda():
         read_env_flags += [
@@ -245,7 +235,7 @@ def __bootstrap__():
     core.init_gflags(["--tryfromenv=" + ",".join(read_env_flags)])
     core.init_glog(sys.argv[0])
     # don't init_p2p when in unittest to save time.
-    core.init_devices(not in_test)
+    core.init_devices()
 
 
 # TODO(panyx0718): Avoid doing complex initialization logic in __init__.py.

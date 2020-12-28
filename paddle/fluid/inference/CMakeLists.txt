@@ -42,15 +42,16 @@ add_subdirectory(api)
 # Create static inference library if needed
 # All static libs in inference/api
 set(STATIC_INFERENCE_API paddle_inference_api analysis_predictor
-     zero_copy_tensor reset_tensor_array 
+     zero_copy_tensor reset_tensor_array
         analysis_config paddle_pass_builder activation_functions ${mkldnn_quantizer_cfg})
-if(WIN32)
-  cc_library(paddle_fluid DEPS ${fluid_modules} ${STATIC_INFERENCE_API}) 
+#TODO(wilber, T8T9): Do we still need to support windows gpu static library?
+if(WIN32 AND WITH_GPU)
+  cc_library(paddle_fluid DEPS ${fluid_modules} ${STATIC_INFERENCE_API})
 else()
- create_static_lib(paddle_fluid ${fluid_modules} ${STATIC_INFERENCE_API}) 
+  create_static_lib(paddle_fluid ${fluid_modules} ${STATIC_INFERENCE_API})
 endif()
 
-if(NOT APPLE AND NOT WIN32)
+if(NOT APPLE)
   # TODO(liuyiqu: Temporarily disable the link flag because it is not support on Mac.
   set(LINK_FLAGS "-Wl,--retain-symbols-file ${CMAKE_CURRENT_SOURCE_DIR}/paddle_fluid.sym")
   set_target_properties(paddle_fluid PROPERTIES LINK_FLAGS "${LINK_FLAGS}")
@@ -76,8 +77,13 @@ set(SHARED_INFERENCE_SRCS
     ${mkldnn_quantizer_src_file})
 
 # Create shared inference library defaultly
-cc_library(paddle_fluid_shared SHARED SRCS ${SHARED_INFERENCE_SRCS}
+if(NOT WITH_DISTRIBUTE)
+  cc_library(paddle_fluid_shared SHARED SRCS ${SHARED_INFERENCE_SRCS}
       DEPS ${fluid_modules} analysis_predictor)
+else()
+  cc_library(paddle_fluid_shared SHARED SRCS ${SHARED_INFERENCE_SRCS}
+      DEPS ${fluid_modules} analysis_predictor fleet ps_service)
+endif()
 
 get_property(os_dependency_modules GLOBAL PROPERTY OS_DEPENDENCY_MODULES)
 target_link_libraries(paddle_fluid_shared ${os_dependency_modules})
@@ -92,7 +98,7 @@ if(NOT APPLE AND NOT WIN32)
   set_target_properties(paddle_fluid_shared PROPERTIES LINK_FLAGS "${LINK_FLAGS}")
   # check symbol hidden
   FILE(WRITE ${CMAKE_CURRENT_BINARY_DIR}/check_symbol.cmake
-    "execute_process(COMMAND bash -c \"${CMAKE_CURRENT_SOURCE_DIR}/check_symbol.sh"
+    "execute_process(COMMAND sh -c \"${CMAKE_CURRENT_SOURCE_DIR}/check_symbol.sh"
     " ${CMAKE_CURRENT_BINARY_DIR}/libpaddle_fluid.so\" RESULT_VARIABLE symbol_res)\n"
     "if(NOT \"\${symbol_res}\" STREQUAL \"0\")\n"
     "  message(FATAL_ERROR \"Check symbol failed.\")\n"

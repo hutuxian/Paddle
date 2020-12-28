@@ -156,7 +156,8 @@ CpuPassStrategy::CpuPassStrategy() : PassStrategy({}) {
                   // "seqpool_concat_fuse_pass",    //
                   "seqpool_cvm_concat_fuse_pass",  //
                   // "embedding_fc_lstm_fuse_pass", //
-                  "fc_lstm_fuse_pass",                       //
+                  // TODO(wilber): fix correctness problem.
+                  // "fc_lstm_fuse_pass",                       //
                   "mul_lstm_fuse_pass",                      //
                   "fc_gru_fuse_pass",                        //
                   "mul_gru_fuse_pass",                       //
@@ -205,7 +206,9 @@ void CpuPassStrategy::EnableMKLDNN() {
              "reshape_transpose_matmul_mkldnn_fuse_pass",  //
              "matmul_transpose_reshape_fuse_pass",         //
              // Disabled due to topology-dependent speed-up
-             // "fc_mkldnn_pass",
+             //"fc_mkldnn_pass",
+             //"fc_act_mkldnn_fuse_pass",
+             "batch_norm_act_fuse_pass",
              "mkldnn_inplace_pass",  // This pass should be activated after
                                      // fuses
          })) {
@@ -231,6 +234,10 @@ void CpuPassStrategy::EnableMkldnnQuantizer() {
 
 void CpuPassStrategy::EnableMkldnnBfloat16() {
 #ifdef PADDLE_WITH_MKLDNN
+  if (!use_mkldnn_bfloat16_) {
+    passes_.push_back("cpu_bfloat16_placement_pass");
+    passes_.push_back("cpu_bfloat16_pass");
+  }
   use_mkldnn_bfloat16_ = true;
 #else
   use_mkldnn_bfloat16_ = false;

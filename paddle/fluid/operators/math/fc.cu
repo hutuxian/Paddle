@@ -35,7 +35,7 @@ struct FcTypeTraits<double> {
 };
 
 template <>
-struct FcTypeTraits<double> {
+struct FcTypeTraits<platform::float16> {
   typedef half4 Type;
 };
 
