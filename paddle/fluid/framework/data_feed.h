@@ -998,6 +998,33 @@ struct AllSlotInfo {
   int slot_value_idx;
 };
 
+template<typename T>
+class TVecWriter {
+public:
+    TVecWriter() : _data(0) {
+    }
+    void reset(T *data) {
+        _data = data;
+    }
+    void move(T &v) {
+        size_t m = v.size();
+        _lock.lock();
+        for (size_t i = 0; i < m; i++) {
+            _data->push_back(std::move(v[i]));
+        }
+        _lock.unlock();
+        v.clear();
+        v.shrink_to_fit();
+    }
+private:
+    std::mutex _lock;
+    T *_data;
+};
+
+
+
+
+
 class ISlotParser {
  public:
   virtual ~ISlotParser() {}
@@ -1023,6 +1050,10 @@ class ISlotParser {
       const std::string& line,
       std::function<void(std::string&, std::vector<float>&)> AddIndexDataFunc) {
     return true;
+  }
+  virtual int unroll_instance(std::vector<SlotRecord>& items, int ins_num,
+      std::function<void(std::vector<SlotRecord> & )> RealeseMemory) {
+    return 1;  
   }
 };
 struct UsedSlotInfo {
@@ -1474,6 +1505,8 @@ class InputTableDataFeed : public SlotPaddleBoxDataFeed {
         "InputTableDataFeed is not implemented LoadIntoMemoryByCommand");
   }
   virtual void LoadIntoMemoryByLib(void);
+ public:
+  virtual void UnrollInstance(std::vector<SlotRecord>& items);
 };
 
 class InputIndexDataFeed : public DataFeed {

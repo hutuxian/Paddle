@@ -2047,6 +2047,18 @@ void PadBoxSlotDataset::PrepareTrain(void) {
   }
 }
 
+
+void InputTableDataset::UnrollInstance() {
+  VLOG(3) << "DatasetImpl<T>::LoadIntoMemory() begin";
+//  platform::Timer timeline;
+//  timeline.Start();
+  auto feed_obj = reinterpret_cast<InputTableDataFeed*>(readers_[0].get());
+  feed_obj->UnrollInstance(input_records_);
+
+}
+
+
+
 void InputTableDataset::LoadIntoMemory() {
   VLOG(3) << "InputTableDataset<T>::LoadIntoMemory() begin";
 
@@ -2109,6 +2121,7 @@ void InputTableDataset::LoadIntoMemory() {
   VLOG(1) << "PadBoxSlotDataset::LoadIntoMemory() end"
           << ", memory data size=" << input_records_.size()
           << ", cost time=" << timeline.ElapsedSec() << " seconds";
+  UnrollInstance();
 }
 
 void InputTableDataset::LoadIndexIntoMemory() {

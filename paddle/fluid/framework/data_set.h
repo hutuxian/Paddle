@@ -387,6 +387,9 @@ class InputTableDataset : public PadBoxSlotDataset {
   virtual void SetIndexFileList(const std::vector<std::string>& filelist) {
     index_filelist_ = filelist;
   }
+    
+  // merge ins from multiple sources and unroll
+  virtual void UnrollInstance();
 
  private:
   void LoadIndexIntoMemory();
