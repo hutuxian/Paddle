@@ -1512,12 +1512,11 @@ void PadBoxSlotDataset::LoadIntoMemory() {
   }
   //  shuffle_channel_->Clear();
   //  input_channel_->Clear();
-
+  UnrollInstance();
   timeline.Pause();
   VLOG(1) << "PadBoxSlotDataset::LoadIntoMemory() end"
           << ", memory data size=" << input_records_.size()
           << ", cost time=" << timeline.ElapsedSec() << " seconds";
-  UnrollInstance();
 }
 // add fea keys
 void PadBoxSlotDataset::MergeInsKeys(const Channel<SlotRecord>& in) {
