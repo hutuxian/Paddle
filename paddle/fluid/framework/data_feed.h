@@ -1261,6 +1261,10 @@ class ISlotParser {
       std::function<void(std::string&, std::vector<float>&)> AddIndexDataFunc) {
     return true;
   }
+  virtual int unroll_instance(std::vector<SlotRecord>& items, int ins_num,
+      std::function<void(std::vector<SlotRecord> & )> RealeseMemory) {
+    return 1;
+  }
 };
 struct UsedSlotInfo {
   int idx;
@@ -1620,7 +1624,7 @@ class SlotPaddleBoxDataFeed : public DataFeed {
   virtual void AssignFeedVar(const Scope& scope);
   virtual int GetCurrentPhase();
   virtual void LoadIntoMemory();
-
+  virtual void UnrollInstance(std::vector<SlotRecord>& items);
  protected:
   virtual void LoadIntoMemoryByCommand(void);
   virtual void LoadIntoMemoryByLib(void);

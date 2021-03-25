@@ -1517,6 +1517,7 @@ void PadBoxSlotDataset::LoadIntoMemory() {
   VLOG(1) << "PadBoxSlotDataset::LoadIntoMemory() end"
           << ", memory data size=" << input_records_.size()
           << ", cost time=" << timeline.ElapsedSec() << " seconds";
+  UnrollInstance();
 }
 // add fea keys
 void PadBoxSlotDataset::MergeInsKeys(const Channel<SlotRecord>& in) {
@@ -2053,6 +2054,11 @@ void PadBoxSlotDataset::PrepareTrain(void) {
           ->AddBatchOffset(offset[i]);
     }
   }
+}
+
+void PadBoxSlotDataset::UnrollInstance() {
+  auto feed_obj = reinterpret_cast<InputTableDataFeed*>(readers_[0].get());
+  feed_obj->UnrollInstance(input_records_);
 }
 
 void InputTableDataset::LoadIntoMemory() {
