@@ -383,6 +383,20 @@ class PadBoxSlotDataset : public DatasetImpl<SlotRecord> {
 
  protected:
   void MergeInsKeys(const Channel<SlotRecord>& in);
+  void compute_batch_num_pvins(const int64_t ins_num, const int batch_size,
+                              const int thread_num,
+                              std::vector<std::pair<int, int>>* offset);
+  int compute_thread_batch_nccl_pvins(
+    const int thr_num, const int64_t total_instance_num,
+    const int minibatch_size, std::vector<std::pair<int, int>>* nccl_offsets);
+
+  int delete_2pv(std::vector< std::vector<int> > insnum_idx, int first_insnum, int sec_insnum, int cur_idx);
+  int delete_1pv(std::vector< std::vector<int> > insnum_idx, int insnum, int cur_idx);
+  int delete_n_same_pv(std::vector< std::vector<int> > insnum_idx, int nsame, int insnum, int cur_idx);
+  int pv_batch_insnum_mul8(int ins_num, int batch_size, int start_idx, int thread_batch_num, int offset_num, int left_ins_num, std::vector<std::pair<int, int>>* offset);
+  void compute_left_batch_num_pvins(const int ins_num, const int thread_num,
+                                   std::vector<std::pair<int, int>>* offset,
+                                   const int start_pos);
 
  protected:
   Channel<SlotRecord> shuffle_channel_ = nullptr;
