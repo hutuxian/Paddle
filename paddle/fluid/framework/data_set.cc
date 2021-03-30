@@ -2433,12 +2433,32 @@ void PadBoxSlotDataset::compute_batch_num_pvins(const int64_t ins_num, const int
     // split data to thread avg two rounds
     
     left_ins_num = (ins_num - 1) - cur_pos + 1;
-    compute_left_batch_num_pvins(left_ins_num, thread_num * 2, offset, cur_pos);
+
+    int rounds = 1;
+    while (left_ins_num / (rounds * thread_num) > batch_size) {
+        VLOG(0) << "left_ins_num more than 8*batch_size, rounds=" << rounds
+                << ", left_ins_num=" << left_ins_num
+                << ", left_ins_num/(rounds*thread_num)=" << left_ins_num / (rounds * thread_num);
+        rounds++;
+    }
+    VLOG(0) << "left_ins_num need rounds=" << rounds;
+    compute_left_batch_num_pvins(left_ins_num, thread_num * rounds, offset, cur_pos);
+
     //compute_left_batch_num(left_ins_num, thread_num * 2, offset, cur_pos);
   } else {
     int cur_pos = pv_batch_insnum_mul8(ins_num, batch_size, 0, thread_batch_num, offset_num, left_ins_num, offset);
     if (left_ins_num > 0) {
       left_ins_num = (ins_num - 1) - cur_pos + 1;
+
+    int rounds = 1;
+    while (left_ins_num / (rounds * thread_num) > batch_size) {
+        VLOG(0) << "left_ins_num more than 8*batch_size, rounds=" << rounds
+                << ", left_ins_num=" << left_ins_num
+                << ", left_ins_num/(rounds*thread_num)=" << left_ins_num / (rounds * thread_num);
+        rounds++;
+    }
+
+    VLOG(0) << "left_ins_num need rounds=" << rounds;
       compute_left_batch_num_pvins(left_ins_num, thread_num, offset, cur_pos);
       //compute_left_batch_num(left_ins_num, thread_num, offset, cur_pos);
     }
