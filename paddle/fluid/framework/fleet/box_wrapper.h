@@ -217,6 +217,7 @@ class InputTable {
     cudaMemcpy(d_keys.data(), keys, d_keys.size() * sizeof(uint64_t),
                cudaMemcpyDeviceToHost);
     for (size_t i = 0; i < num; ++i) {
+      CHECK(d_keys[i]<table_.size());
       memcpy(&d_values[i * dim_], &table_[d_keys[i]], dim_ * sizeof(float));
     }
     cudaMemcpy(values, d_values.data(), d_values.size() * sizeof(float),

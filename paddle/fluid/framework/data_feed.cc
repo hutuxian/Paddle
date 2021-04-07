@@ -3315,6 +3315,21 @@ bool SlotPaddleBoxDataFeedWithGpuReplicaCache::ParseOneInstance(
   return (uint64_total_slot_num > 0);
 }
 
+void InputTableDataFeed::UnrollInstance(std::vector<SlotRecord>& items) {
+    paddle::framework::ISlotParser* parser =
+      global_parser_pool().Get(parser_so_path_, all_slots_info_);
+    CHECK(parser != nullptr);
+    std::cout<<"begin merge "<<std::endl;
+    if (parser->unroll_instance(
+          items,items.size(), [this](std::vector<SlotRecord> & release) {
+                  SlotRecordPool().put(&release);
+                  release.clear();
+                  release.shrink_to_fit();
+            })) {
+        std::cout<<"merge success"<<std::endl;
+  }
+}
+
 void InputTableDataFeed::LoadIntoMemoryByLib() {
   paddle::framework::ISlotParser* parser =
       global_parser_pool().Get(parser_so_path_, all_slots_info_);
