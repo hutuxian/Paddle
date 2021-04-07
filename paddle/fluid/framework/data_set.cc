@@ -2168,7 +2168,7 @@ int PadBoxSlotDataset::delete_n_same_pv(std::vector< std::vector<int> > insnum_i
 
 int PadBoxSlotDataset::pv_batch_insnum_mul8(int ins_num, int batch_size, int start_idx, int thread_batch_num, int offset_num, int left_ins_num, std::vector<std::pair<int, int>>* offset) {
     std::vector< std::vector<int> > insnum_idx(20); // one pv insnum -> pv idx, one pv insnum = 1 2 3 4 5;
-    VLOG(0) << "offset_num=" << offset_num
+    VLOG(3) << "offset_num=" << offset_num
             << ", ins_num=" << ins_num
             << ", batch_size=" << batch_size
             << ", start_idx=" << start_idx
@@ -2178,10 +2178,7 @@ int PadBoxSlotDataset::pv_batch_insnum_mul8(int ins_num, int batch_size, int sta
     int batchid = 0;
     int i = start_idx;
     int cur_mod = 0;
-    //int start_idx = 0;
     int ori_total_ins = 0;
-    //while (i < (ins_num / thread_batch_num * thread_batch_num) && batchid < offset_num) {
-    //while (i < thread_batch_num * offset_num && batchid < offset_num) {
     while (i < start_idx + batch_size * offset_num && batchid < offset_num) {
       int ori_start_idx = start_idx;
       int one_pv_insnum = input_pv_ins_[i]->ads.size();
@@ -2193,9 +2190,7 @@ int PadBoxSlotDataset::pv_batch_insnum_mul8(int ins_num, int batch_size, int sta
           batchid++;
           int delpvnum = 0;
           if (cur_mod == 0) {
-            //offset->push_back(std::make_pair(start_idx, batch_size));
-            //start_idx = start_idx + batch_size;
-            VLOG(0) << "curmod=0";
+            VLOG(3) << "curmod=0";
           } else if (cur_mod == 1) {
               //delet_1pv(std::vector< std::vector<int> > insnum_idx, int insnum, int cur_idx)
               delpvnum = delete_1pv(insnum_idx, 1, i);
@@ -2326,7 +2321,6 @@ int PadBoxSlotDataset::pv_batch_insnum_mul8(int ins_num, int batch_size, int sta
                  }
               }
           }// end mod 7
-        //}
         if (delpvnum != -1) {
           offset->push_back(std::make_pair(start_idx, batch_size-delpvnum));
           start_idx = start_idx + (batch_size - delpvnum);
@@ -2339,7 +2333,7 @@ int PadBoxSlotDataset::pv_batch_insnum_mul8(int ins_num, int batch_size, int sta
         for (int k=ori_start_idx; k < start_idx; k++) {
             total_ins += input_pv_ins_[k]->ads.size();
         }
-        VLOG(0) << "batchid = " << batchid << ", cur_mod = " << cur_mod 
+        VLOG(3) << "batchid = " << batchid << ", cur_mod = " << cur_mod 
                 << ", delpvnum = " << delpvnum
                 << ", start_idx = " << ori_start_idx
                 << ", new_start_idx = " << start_idx
@@ -2359,13 +2353,9 @@ int PadBoxSlotDataset::pv_batch_insnum_mul8(int ins_num, int batch_size, int sta
     return start_idx;
 }
 
-//int PadBoxSlotDataset::pv_batch_insnum_mul8(int ins_num, int batch_size, int start_idx, int thread_batch_num, int offset_num, int left_ins_num, std::vector<std::pair<int, int>>* offset) {
-
-//compute_left_batch_num_pvins(left_ins_num, thread_num, offset, cur_pos);
 void PadBoxSlotDataset::compute_left_batch_num_pvins(const int ins_num, const int thread_num,
                                    std::vector<std::pair<int, int>>* offset,
                                    const int start_pos) {
-  //int cur_pos = start_pos;
   int batch_size = ins_num / thread_num;
   int left_num = ins_num % thread_num;
   
@@ -2377,10 +2367,20 @@ void PadBoxSlotDataset::compute_left_batch_num_pvins(const int ins_num, const in
   int cur_pos = PadBoxSlotDataset::pv_batch_insnum_mul8(ins_num, batch_size, start_pos, thread_batch_num, offset_num - 1, left_num, offset);
 
   int last_thread_insnum = ins_num - (cur_pos - start_pos);
-  offset->push_back(std::make_pair(cur_pos, last_thread_insnum));
-  //offset->push_back(std::make_pair(cur_pos, left_num));
+
+  // fix the last batch's insnum
+  int last_batch_pos = PadBoxSlotDataset::pv_batch_insnum_mul8(last_thread_insnum, last_thread_insnum, cur_pos, 1*last_thread_insnum, 1, 0, offset);
+  int last_thread_insnum_true = last_batch_pos - cur_pos;
+  
+  VLOG(3) << "ori input_pv_ins_.size()=" << input_pv_ins_.size();
+  int delpvnum = last_thread_insnum - last_thread_insnum_true;
+  for (int k=0; k<delpvnum; k++) {
+      input_pv_ins_.pop_back();
+  }
+  VLOG(3) << "final input_pv_ins_.size()=" << input_pv_ins_.size()
+          << "the last batch's delpvnum=" << delpvnum;
   int final_offset_num = offset->size();
-  VLOG(0) << "in compute_left_batch_num_pvins, lefted ins_num=" << ins_num
+  VLOG(3) << "in compute_left_batch_num_pvins, lefted ins_num=" << ins_num
           << ", thread_num=" << thread_num
           << ", left ins batch_size=" << batch_size
           << ", computed_offset_num=" << offset_num
@@ -2390,24 +2390,12 @@ void PadBoxSlotDataset::compute_left_batch_num_pvins(const int ins_num, const in
           << ", cur_pos=" << cur_pos 
           << ", ori_left_ins=" << left_num
           << ", the last thread true insnum=" << last_thread_insnum;
-  
-  //for (int i = 0; i < thread_num; ++i) {
-  //  int batch_num_size = batch_size;
-  //  if (i == 0) {
-  //    batch_num_size = batch_num_size + left_num;
-  //  }
-  //  offset->push_back(std::make_pair(cur_pos, batch_num_size));
-  //  cur_pos += batch_num_size;
-  //}
 }
 
 //sx: pvins num is multiple of 4
-//static void compute_batch_num_pvins(const int64_t ins_num, const int batch_size,
 void PadBoxSlotDataset::compute_batch_num_pvins(const int64_t ins_num, const int batch_size,
                               const int thread_num,
                               std::vector<std::pair<int, int>>* offset) {
-  // input_pv_ins_ std::vector<SlotPvInstance>
-
   int thread_batch_num = batch_size * thread_num;
   LOG(WARNING) << "in compute_batch_num_pvins, thread_batch_num  " << thread_batch_num 
       << ", batch_size " << batch_size << ", thread_num " << thread_num;
@@ -2418,7 +2406,6 @@ void PadBoxSlotDataset::compute_batch_num_pvins(const int64_t ins_num, const int
     return;
   }
 
-  //int cur_pos = 0;
   int offset_num = static_cast<int>(ins_num / thread_batch_num) * thread_num;
   int left_ins_num = static_cast<int>(ins_num % thread_batch_num);
 
@@ -2426,25 +2413,18 @@ void PadBoxSlotDataset::compute_batch_num_pvins(const int64_t ins_num, const int
     offset_num = offset_num - thread_num;
     left_ins_num = left_ins_num + thread_batch_num;
     int cur_pos = pv_batch_insnum_mul8(ins_num, batch_size, 0, thread_batch_num, offset_num, left_ins_num, offset);
-    //for (int i = 0; i < offset_num; ++i) {
-    //  offset->push_back(std::make_pair(cur_pos, batch_size));
-    //  cur_pos += batch_size;
-    //}
-    // split data to thread avg two rounds
     
     left_ins_num = (ins_num - 1) - cur_pos + 1;
 
     int rounds = 1;
     while (left_ins_num / (rounds * thread_num) > batch_size) {
-        VLOG(0) << "left_ins_num more than 8*batch_size, rounds=" << rounds
+        VLOG(3) << "left_ins_num more than 8*batch_size, rounds=" << rounds
                 << ", left_ins_num=" << left_ins_num
                 << ", left_ins_num/(rounds*thread_num)=" << left_ins_num / (rounds * thread_num);
         rounds++;
     }
-    VLOG(0) << "left_ins_num need rounds=" << rounds;
+    VLOG(3) << "left_ins_num need rounds=" << rounds;
     compute_left_batch_num_pvins(left_ins_num, thread_num * rounds, offset, cur_pos);
-
-    //compute_left_batch_num(left_ins_num, thread_num * 2, offset, cur_pos);
   } else {
     int cur_pos = pv_batch_insnum_mul8(ins_num, batch_size, 0, thread_batch_num, offset_num, left_ins_num, offset);
     if (left_ins_num > 0) {
@@ -2452,231 +2432,18 @@ void PadBoxSlotDataset::compute_batch_num_pvins(const int64_t ins_num, const int
 
     int rounds = 1;
     while (left_ins_num / (rounds * thread_num) > batch_size) {
-        VLOG(0) << "left_ins_num more than 8*batch_size, rounds=" << rounds
+        VLOG(3) << "left_ins_num more than 8*batch_size, rounds=" << rounds
                 << ", left_ins_num=" << left_ins_num
                 << ", left_ins_num/(rounds*thread_num)=" << left_ins_num / (rounds * thread_num);
         rounds++;
     }
 
-    VLOG(0) << "left_ins_num need rounds=" << rounds;
-      compute_left_batch_num_pvins(left_ins_num, thread_num, offset, cur_pos);
-      //compute_left_batch_num(left_ins_num, thread_num, offset, cur_pos);
+    VLOG(3) << "left_ins_num need rounds=" << rounds;
+      compute_left_batch_num_pvins(left_ins_num, thread_num * rounds, offset, cur_pos);
     }
-    ///
-    /*std::vector< std::vector<int> > insnum_idx(20); // one pv insnum -> pv idx, one pv insnum = 1 2 3 4 5;
-    VLOG(0) << "offset_num=" << offset_num
-            << "left_ins_num=" << left_ins_num
-            << "ins_num / thread_batch_num * thread_batch_num=" << ins_num / thread_batch_num * thread_batch_num;
-    int batchid = 0;
-    int i = 0;
-    int cur_mod = 0;
-    int start_idx = 0;
-    int ori_total_ins = 0;
-    while (i < (ins_num / thread_batch_num * thread_batch_num) && batchid < offset_num) {
-      int ori_start_idx = start_idx;
-      int one_pv_insnum = input_pv_ins_[i]->ads.size();
-      insnum_idx[one_pv_insnum].push_back(i);
-      cur_mod = (cur_mod + one_pv_insnum) % 8;
-      ori_total_ins += one_pv_insnum;
-
-      if ((i - start_idx + 1) % batch_size == 0) {
-          batchid++;
-          int delpvnum = 0;
-          if (cur_mod == 0) {
-            //offset->push_back(std::make_pair(start_idx, batch_size));
-            //start_idx = start_idx + batch_size;
-            VLOG(0) << "curmod=0";
-          } else if (cur_mod == 1) {
-              //delet_1pv(std::vector< std::vector<int> > insnum_idx, int insnum, int cur_idx)
-              delpvnum = delete_1pv(insnum_idx, 1, i);
-          } else if (cur_mod == 2) {
-              delpvnum = delete_1pv(insnum_idx, 2, i);
-              if (delpvnum == -1) {
-                  //delet_n_same_pv(std::vector< std::vector<int> > insnum_idx, int n, int insnum, int cur_idx) {
-                  delpvnum = delete_n_same_pv(insnum_idx, 2, 1, i);
-              }
-          } else if (cur_mod == 3) {
-              delpvnum = delete_1pv(insnum_idx, 3, i);
-              if (delpvnum == -1) {
-                delpvnum = delete_n_same_pv(insnum_idx, 3, 1, i);
-                if (delpvnum == -1) {
-                   delpvnum = delete_2pv(insnum_idx, 1, 2, i);
-                }
-              }
-          } else if (cur_mod == 4) {
-              delpvnum = delete_1pv(insnum_idx, 4, i);
-              if (delpvnum == -1) {
-                delpvnum = delete_n_same_pv(insnum_idx, 4, 1, i);
-                if (delpvnum == -1) {
-                   delpvnum = delete_2pv(insnum_idx, 1, 3, i);
-                   if (delpvnum == -1) {
-                       delpvnum = delete_n_same_pv(insnum_idx, 2, 2, i);
-                   }
-                }
-              }
-          } else if (cur_mod == 5) {
-              //del1pv  (1,5) 
-              //del5pv (5,1) 
-              //del2pv (1,2+1,3) (1,4 + 1,1)
-              //del3pv (2,1 + 1,3) (2,2 + 1,1)
-              //del4pv (1,2+3,1)   
-              delpvnum = delete_n_same_pv(insnum_idx, 5, 1, i);
-              if (delpvnum == -1) {
-                 delpvnum = delete_2pv(insnum_idx, 2, 3, i);
-                 if (delpvnum == -1) {
-                    delpvnum = delete_2pv(insnum_idx, 1, 4, i);
-                    if (delpvnum == -1) {
-                        int delpvnum1 = -1;
-                        int delpvnum2 = -1;
-                        delpvnum1 = delete_n_same_pv(insnum_idx, 2, 1, i);
-                        if (delpvnum1 != -1) {
-                            delpvnum2 = delete_1pv(insnum_idx, 3, i-2);
-                        }
-                        if (delpvnum1 != -1 && delpvnum2 != -1) {
-                            delpvnum = delpvnum1 + delpvnum2;
-                        }
-                        else {
-                            int delpvnum1 = -1;
-                            int delpvnum2 = -1;
-                            delpvnum1 = delete_n_same_pv(insnum_idx, 2, 2, i);
-                            if (delpvnum1 != -1) {
-                                delpvnum2 = delete_1pv(insnum_idx, 1, i-2);
-                            }
-                            if (delpvnum1 != -1 && delpvnum2 != -1) {
-                                delpvnum = delpvnum1 + delpvnum2;
-                            }
-                            else {
-                                // fail
-                            }
-                        }
-                    }
-                 }
-              }
-          } else if (cur_mod == 6) {
-              //del6pv (6,1) 
-              //del2pv 2+4 1+5 3+3 (1,2+1,4) (1,1 + 1,5) 
-              //del3pv (2,1 + 1,4) (3,2) (2,3)
-              //del4pv (2,2 + 2,1) (3,1 + 1,3)
-              //del5pv (4,1 + 1,2)
-              delpvnum = delete_n_same_pv(insnum_idx, 6, 1, i);
-              if (delpvnum == -1) {
-                 delpvnum = delete_2pv(insnum_idx, 3, 3, i);
-                 if (delpvnum == -1) {
-                    delpvnum = delete_2pv(insnum_idx, 2, 4, i);
-                    if (delpvnum == -1) {
-                        int delpvnum1 = -1;
-                        int delpvnum2 = -1;
-                        delpvnum1 = delete_n_same_pv(insnum_idx, 2, 2, i);
-                        if (delpvnum1 != -1) {
-                            delpvnum2 = delete_n_same_pv(insnum_idx, 2, 1, i-2);
-                        }
-                        if (delpvnum1 != -1 && delpvnum2 != -1) {
-                            delpvnum = delpvnum1 + delpvnum2;
-                        }
-                        if (delpvnum == -1) {
-                            int delpvnum1 = -1;
-                            int delpvnum2 = -1;
-                            delpvnum1 = delete_n_same_pv(insnum_idx, 3, 1, i);
-                            if (delpvnum1 != -1) {
-                                delpvnum2 = delete_1pv(insnum_idx, 3, i-3);
-                            }
-                            if (delpvnum1 != -1 && delpvnum2 != -1) {
-                                delpvnum = delpvnum1 + delpvnum2;
-                            }
-                        }
-                    }
-                 }
-              }
-          } else if (cur_mod == 7) {
-              //del2pv (1,2 + 1,5) (1,3 + 1,4) (2,2+ 1,3) (2,3 + 1,1)
-              delpvnum = delete_n_same_pv(insnum_idx, 7, 1, i);
-              if (delpvnum == -1) {
-                 delpvnum = delete_2pv(insnum_idx, 3, 4, i);
-                 if (delpvnum == -1) {
-                     int delpvnum1 = -1;
-                     int delpvnum2 = -1;
-                     delpvnum1 = delete_n_same_pv(insnum_idx, 2, 2, i);
-                     if (delpvnum1 != -1) {
-                         delpvnum2 = delete_1pv(insnum_idx, 3, i-2);
-                     }
-                     if (delpvnum1 != -1 && delpvnum2 != -1) {
-                         delpvnum = delpvnum1 + delpvnum2;
-                     }
-                     if (delpvnum == -1) {
-                        int delpvnum1 = -1;
-                        int delpvnum2 = -1;
-                        delpvnum1 = delete_n_same_pv(insnum_idx, 2, 3, i);
-                        if (delpvnum1 != -1) {
-                            delpvnum2 = delete_1pv(insnum_idx, 1, i-2);
-                        }
-                        if (delpvnum1 != -1 && delpvnum2 != -1) {
-                            delpvnum = delpvnum1 + delpvnum2;
-                        }
-                     }
-                 }
-              }
-          }// end mod 7
-        //}
-        if (delpvnum != -1) {
-          offset->push_back(std::make_pair(start_idx, batch_size-delpvnum));
-          start_idx = start_idx + (batch_size - delpvnum);
-        } else {
-            offset->push_back(std::make_pair(start_idx, batch_size));
-            start_idx = start_idx + batch_size;
-        }
-        i = start_idx - 1;
-        int total_ins = 0;
-        for (int k=ori_start_idx; k < start_idx; k++) {
-            total_ins += input_pv_ins_[k]->ads.size();
-        }
-        VLOG(0) << "batchid = " << batchid << ", cur_mod = " << cur_mod 
-                << ", delpvnum = " << delpvnum
-                << ", start_idx = " << ori_start_idx
-                << ", new_start_idx = " << start_idx
-                << ", ori_total_ins = " << ori_total_ins
-                << ", now_total_ins = " << total_ins
-                << ", ori_total_ins % 8 = " << (ori_total_ins % 8)
-                << ", now_total_ins % 8 = " << (total_ins % 8);
-        ori_total_ins = 0;
-        for (int y=0; y<7; y++) {
-            insnum_idx[y].clear();
-        }
-        cur_mod = 0;
-
-      } // end if
-      i++;
-    } // end while */
   }// end else
 }
 
-    /*
-    for (int i = 0; i < offset_num; ++i) {
-      offset->push_back(std::make_pair(cur_pos, batch_size));
-      cur_pos += batch_size;
-      
-      int one_batch_ins_num = 0;
-      int j = 0;
-      for (j = 0; j < batch_size; j++) {
-          one_pv_ins = input_pv_ins_[j].ads.size();
-          one_batch_ins_num += one_pv_ins;
-      }
-      if (one_batch_ins_num % 8 == 0) {
-
-      } else {
-        //int lack_num = (one_batch_ins_num / 8 + 1) * 8 - one_batch_ins_num; // each batch will del ins
-        int k = 0;
-        while (one_batch_ins_num % 8 != 0) {
-            one_batch_ins_num += input_pv_ins_[j+k].ads.size();
-        }
-      }
-    }
-    if (left_ins_num > 0) {
-      compute_left_batch_num(left_ins_num, thread_num, offset, cur_pos);
-    }
-    */
-
-//sx: compute_thread_batch_nccl_pvins(thread_num_, GetPvDataSize(), batchsize, &offset);
-//static int compute_thread_batch_nccl_pvins(
 int PadBoxSlotDataset::compute_thread_batch_nccl_pvins(
     const int thr_num, const int64_t total_instance_num,
     const int minibatch_size, std::vector<std::pair<int, int>>* nccl_offsets) {
