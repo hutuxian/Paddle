@@ -406,7 +406,7 @@ class InputTableDataset : public PadBoxSlotDataset {
   virtual void SetIndexFileList(const std::vector<std::string>& filelist) {
     index_filelist_ = filelist;
   }
-
+  virtual void UnrollInstance();
  private:
   void LoadIndexIntoMemory();
 
