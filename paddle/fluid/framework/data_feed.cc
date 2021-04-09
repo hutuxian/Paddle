@@ -2985,7 +2985,7 @@ void SlotPaddleBoxDataFeed::UnrollInstance(std::vector<SlotRecord>& items) {
     paddle::framework::ISlotParser* parser =
       global_parser_pool().Get(parser_so_path_, all_slots_info_);
     CHECK(parser != nullptr);
-    if (parser->unroll_instance(
+    if (parser->UnrollInstance(
           items,items.size(), [this](std::vector<SlotRecord> & release) {
                   SlotRecordPool().put(&release);
                   release.clear();

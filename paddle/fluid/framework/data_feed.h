@@ -1261,7 +1261,7 @@ class ISlotParser {
       std::function<void(std::string&, std::vector<float>&)> AddIndexDataFunc) {
     return true;
   }
-  virtual int unroll_instance(std::vector<SlotRecord>& items, int ins_num,
+  virtual int UnrollInstance(std::vector<SlotRecord>& items, int ins_num,
       std::function<void(std::vector<SlotRecord> & )> RealeseMemory) {
     return 1;
   }
