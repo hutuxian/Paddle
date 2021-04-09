@@ -71,6 +71,7 @@ class Dataset {
   virtual void SetParseContent(bool parse_content) = 0;
   virtual void SetParseLogKey(bool parse_logkey) = 0;
   virtual void SetEnablePvMerge(bool enable_pv_merge) = 0;
+  virtual void SetEnableBatchInsnumMul8(bool enable_batch_insnum_mul8) = 0;
   virtual bool EnablePvMerge() = 0;
   virtual void SetMergeBySid(bool is_merge) = 0;
   // set merge by ins id
@@ -182,6 +183,7 @@ class DatasetImpl : public Dataset {
   virtual void SetParseContent(bool parse_content);
   virtual void SetParseLogKey(bool parse_logkey);
   virtual void SetEnablePvMerge(bool enable_pv_merge);
+  virtual void SetEnableBatchInsnumMul8(bool enable_batch_insnum_mul8);
   virtual void SetMergeBySid(bool is_merge);
 
   virtual void SetMergeByInsId(int merge_size);
@@ -204,6 +206,7 @@ class DatasetImpl : public Dataset {
   }
   virtual int GetChannelNum() { return channel_num_; }
   virtual bool EnablePvMerge() { return enable_pv_merge_; }
+  virtual bool EnableBatchInsnumMul8() { return enable_batch_insnum_mul8_; }
   virtual std::vector<paddle::framework::DataFeed*> GetReaders();
   virtual void CreateChannel();
   virtual void RegisterClientToClientMsgHandler();
@@ -256,6 +259,7 @@ class DatasetImpl : public Dataset {
     return slots_idx;
   }
 
+  //bool enable_batch_insnum_mul8_;  // True means make the ins number of each batch can be divided by 8
  protected:
   virtual int ReceiveFromClient(int msg_type, int client_id,
                                 const std::string& msg);
@@ -300,6 +304,7 @@ class DatasetImpl : public Dataset {
   bool parse_logkey_;
   bool merge_by_sid_;
   bool enable_pv_merge_;  // True means to merge pv
+  bool enable_batch_insnum_mul8_;  // True means make the ins number of each batch can be divided by 8
   int current_phase_;     // 1 join, 0 update
   size_t merge_size_;
   bool slots_shuffle_fea_eval_ = false;

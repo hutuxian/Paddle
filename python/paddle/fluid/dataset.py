@@ -365,6 +365,7 @@ class InMemoryDataset(DatasetBase):
         self.parse_logkey = False
         self.merge_by_sid = True
         self.enable_pv_merge = False
+        self.enable_batch_insnum_mul8 = False
         self.merge_by_lineid = False
         self.fleet_send_sleep_seconds = None
         self.trainer_num = -1
@@ -397,6 +398,7 @@ class InMemoryDataset(DatasetBase):
         self.dataset.set_parse_logkey(self.parse_logkey)
         self.dataset.set_merge_by_sid(self.merge_by_sid)
         self.dataset.set_enable_pv_merge(self.enable_pv_merge)
+        self.dataset.set_enable_batch_insnum_mul8(self.enable_batch_insnum_mul8)
         self.dataset.set_data_feed_desc(self.desc())
         self.dataset.create_channel()
         self.dataset.create_readers()
@@ -550,6 +552,12 @@ class InMemoryDataset(DatasetBase):
 
         """
         self.enable_pv_merge = enable_pv_merge
+
+    def set_enable_batch_insnum_mul8(self, enable_batch_insnum_mul8):
+        """
+
+        """
+        self.enable_batch_insnum_mul8 = enable_batch_insnum_mul8
 
     def preprocess_instance(self):
         """
@@ -1243,6 +1251,7 @@ class PadBoxSlotDataset(BoxPSDataset):
         self.parse_logkey = False
         self.merge_by_sid = True
         self.enable_pv_merge = False
+        self.enable_batch_insnum_mul8 = False
         self.merge_by_lineid = False
         self.fleet_send_sleep_seconds = None
 
@@ -1288,6 +1297,7 @@ class InputTableDataset(PadBoxSlotDataset):
         self.parse_logkey = False
         self.merge_by_sid = True
         self.enable_pv_merge = False
+        self.enable_batch_insnum_mul8 = False
         self.merge_by_lineid = False
         self.fleet_send_sleep_seconds = None
 

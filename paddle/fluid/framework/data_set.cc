@@ -56,6 +56,7 @@ DatasetImpl<T>::DatasetImpl() {
   merge_by_insid_ = false;
   merge_by_sid_ = true;
   enable_pv_merge_ = false;
+  enable_batch_insnum_mul8_ = false;
   merge_size_ = 2;
   parse_ins_id_ = false;
   parse_content_ = false;
@@ -158,6 +159,11 @@ void DatasetImpl<T>::SetMergeBySid(bool is_merge) {
 template <typename T>
 void DatasetImpl<T>::SetEnablePvMerge(bool enable_pv_merge) {
   enable_pv_merge_ = enable_pv_merge;
+}
+
+template <typename T>
+void DatasetImpl<T>::SetEnableBatchInsnumMul8(bool enable_batch_insnum_mul8) {
+  enable_batch_insnum_mul8_ = enable_batch_insnum_mul8;
 }
 
 template <typename T>
@@ -311,7 +317,6 @@ void DatasetImpl<T>::ReleaseMemory() {
 }
 template <typename T>
 void DatasetImpl<T>::ReleaseMemoryFun() {
-  VLOG(0) << "DatasetImpl<T>::ReleaseMemory() begin";
   if (input_channel_) {
     input_channel_->Clear();
     input_channel_ = nullptr;
@@ -662,6 +667,7 @@ void DatasetImpl<T>::CreateReaders() {
     readers_[i]->SetParseContent(parse_content_);
     readers_[i]->SetParseLogKey(parse_logkey_);
     readers_[i]->SetEnablePvMerge(enable_pv_merge_);
+    readers_[i]->SetEnableBatchInsnumMul8(enable_batch_insnum_mul8_);
     // Notice: it is only valid for untest of test_paddlebox_datafeed.
     // In fact, it does not affect the train process when paddle is
     // complied with Box_Ps.
@@ -738,6 +744,7 @@ void DatasetImpl<T>::CreatePreLoadReaders() {
     preload_readers_[i]->SetParseContent(parse_content_);
     preload_readers_[i]->SetParseLogKey(parse_logkey_);
     preload_readers_[i]->SetEnablePvMerge(enable_pv_merge_);
+    preload_readers_[i]->SetEnableBatchInsnumMul8(enable_batch_insnum_mul8_);
     preload_readers_[i]->SetInputChannel(input_channel_.get());
     preload_readers_[i]->SetOutputChannel(nullptr);
     preload_readers_[i]->SetConsumeChannel(nullptr);
@@ -767,7 +774,6 @@ int64_t DatasetImpl<T>::GetPvDataSize() {
   if (enable_pv_merge_) {
     return input_pv_channel_->Size();
   } else {
-    VLOG(0) << "It does not merge pv..";
     return 0;
   }
 }
@@ -1812,6 +1818,7 @@ void PadBoxSlotDataset::CreateReaders() {
     readers_[i]->SetParseContent(parse_content_);
     readers_[i]->SetParseLogKey(parse_logkey_);
     readers_[i]->SetEnablePvMerge(enable_pv_merge_);
+    readers_[i]->SetEnableBatchInsnumMul8(enable_batch_insnum_mul8_);
     // Notice: it is only valid for untest of test_paddlebox_datafeed.
     // In fact, it does not affect the train process when paddle is
     // complied with Box_Ps.
@@ -1884,11 +1891,31 @@ static void compute_left_batch_num(const int ins_num, const int thread_num,
   int cur_pos = start_pos;
   int batch_size = ins_num / thread_num;
   int left_num = ins_num % thread_num;
+  for (int i = 0; i < thread_num; ++i) {
+    int batch_num_size = batch_size;
+    if (i == 0) {
+      batch_num_size = batch_num_size + left_num;
+    }
+    offset->push_back(std::make_pair(cur_pos, batch_num_size));
+    cur_pos += batch_num_size;
+  }
+}
+
+/**
+ * @Brief
+ * Split the remaining data to each thread
+ */
+static void compute_left_batch_num_mul8(const int ins_num, const int thread_num,
+                                   std::vector<std::pair<int, int>>* offset,
+                                   const int start_pos) {
+  int cur_pos = start_pos;
+  int batch_size = ins_num / thread_num;
+  int left_num = ins_num % thread_num;
 
   batch_size = batch_size - batch_size % 8;
   left_num = left_num + thread_num * (batch_size % 8);
 
-  LOG(WARNING) << "in compute_left_batch_num, total left ins_num  " << ins_num 
+  LOG(WARNING) << "in compute_left_batch_num_mul8, total left ins_num  " << ins_num 
         << ", batch_size_for_left_ins " << batch_size << ", left_num " << left_num;
 
   for (int i = 0; i < thread_num; ++i) {
@@ -1898,7 +1925,7 @@ static void compute_left_batch_num(const int ins_num, const int thread_num,
       int true_left_num = left_num % 8;
       batch_num_size = batch_num_size + (left_num - true_left_num);
 
-      LOG(WARNING) << "thread id0, in compute_left_batch_num, total left ins_num  " << ins_num 
+      LOG(WARNING) << "thread id0, in compute_left_batch_num_mul8, total left ins_num  " << ins_num 
         << ", batch_size_for_left_ins " << batch_size << ", left_num " << true_left_num
         << ", true_left_num " << true_left_num;
     }
@@ -1913,14 +1940,19 @@ static void compute_left_batch_num(const int ins_num, const int thread_num,
  */
 static void compute_batch_num(const int64_t ins_num, const int batch_size,
                               const int thread_num,
-                              std::vector<std::pair<int, int>>* offset) {
+                              std::vector<std::pair<int, int>>* offset,
+                              bool enable_batch_insnum_mul8 = false) {
   int thread_batch_num = batch_size * thread_num;
   LOG(WARNING) << "in compute_batch_num, thread_batch_num  " << thread_batch_num 
       << ", batch_size " << batch_size << ", thread_num " << thread_num;
   // less data
   if (static_cast<int64_t>(thread_batch_num) > ins_num) {
     LOG(WARNING) << "thread_batch_num > ins_num and return, total_ins_num " << ins_num << ", thread_batch_num  " << thread_batch_num;
-    compute_left_batch_num(ins_num, thread_num, offset, 0);
+    if (!enable_batch_insnum_mul8) {
+        compute_left_batch_num(ins_num, thread_num, offset, 0);
+    } else {
+        compute_left_batch_num_mul8(ins_num, thread_num, offset, 0);
+    }
     return;
   }
 
@@ -1935,20 +1967,22 @@ static void compute_batch_num(const int64_t ins_num, const int batch_size,
       cur_pos += batch_size;
     }
     // split data to thread avg two rounds
-    compute_left_batch_num(left_ins_num, thread_num * 2, offset, cur_pos);
-    //LOG(WARNING) << "No call compute_left_batch_num, left_ins_num < thread_num, total_ins_num " << ins_num 
-    //             << ", batch_size " << batch_size << ", thread_num " << thread_num
-    //             << ", left_ins_num " << left_ins_num;
+    if (!enable_batch_insnum_mul8) {
+        compute_left_batch_num(left_ins_num, thread_num * 2, offset, cur_pos);
+    } else {
+        compute_left_batch_num_mul8(left_ins_num, thread_num * 2, offset, cur_pos);
+    }
   } else {
     for (int i = 0; i < offset_num; ++i) {
       offset->push_back(std::make_pair(cur_pos, batch_size));
       cur_pos += batch_size;
     }
     if (left_ins_num > 0) {
-      compute_left_batch_num(left_ins_num, thread_num, offset, cur_pos);
-      //LOG(WARNING) << "No call compute_left_batch_num, left_ins_num >= thread_num, total_ins_num " << ins_num 
-      //           << ", batch_size " << batch_size << ", thread_num " << thread_num
-      //           << ", left_ins_num " << left_ins_num;
+      if (!enable_batch_insnum_mul8) {
+        compute_left_batch_num(left_ins_num, thread_num, offset, cur_pos);
+      } else {
+        compute_left_batch_num_mul8(left_ins_num, thread_num, offset, cur_pos);
+      }
     }
   }
 }
@@ -1956,7 +1990,8 @@ static void compute_batch_num(const int64_t ins_num, const int batch_size,
 //compute_thread_batch_nccl(thread_num_, GetPvDataSize(), batchsize, &offset);
 static int compute_thread_batch_nccl(
     const int thr_num, const int64_t total_instance_num,
-    const int minibatch_size, std::vector<std::pair<int, int>>* nccl_offsets) {
+    const int minibatch_size, std::vector<std::pair<int, int>>* nccl_offsets,
+    bool enable_batch_insnum_mul8 = false) {
   int thread_avg_batch_num = 0;
   if (total_instance_num < static_cast<int64_t>(thr_num)) {
     LOG(WARNING) << "compute_thread_batch_nccl total ins num:["
@@ -1967,7 +2002,7 @@ static int compute_thread_batch_nccl(
 
   auto& offset = (*nccl_offsets);
   // split data avg by thread num
-  compute_batch_num(total_instance_num, minibatch_size, thr_num, &offset);
+  compute_batch_num(total_instance_num, minibatch_size, thr_num, &offset, enable_batch_insnum_mul8);
   thread_avg_batch_num = static_cast<int>(offset.size() / thr_num);
 
   auto& mpi = boxps::MPICluster::Ins();
@@ -2027,13 +2062,13 @@ int PadBoxSlotDataset::delete_1pv(std::vector< std::vector<int> > insnum_idx, in
   for (int j=insnum_idx[insnum].size()-1; j>=0; j--) {
     int pv_idx = insnum_idx[insnum][j];
     if (pv_idx < cur_idx) {
-        VLOG(0) << "in del1pv, should deleted insnum=" << insnum
+        VLOG(5) << "in del1pv, should deleted insnum=" << insnum
                 << ", cur_idx=" << cur_idx
                 << ", before swap, curidx_insnum=" << input_pv_ins_[cur_idx]->ads.size()
                 << ", insnum_s_idx=" << pv_idx
                 << ", pvidx_insnum=" << input_pv_ins_[pv_idx]->ads.size();
       std::swap(input_pv_ins_[pv_idx], input_pv_ins_[cur_idx]);
-        VLOG(0) << "in del1pv, should deleted insnum=" << insnum
+        VLOG(5) << "in del1pv, should deleted insnum=" << insnum
                 << ", cur_idx=" << cur_idx
                 << ", after swap, curidx_insnum=" << input_pv_ins_[cur_idx]->ads.size()
                 << ", insnum_s_idx=" << pv_idx
@@ -2060,7 +2095,7 @@ int PadBoxSlotDataset::delete_2pv(std::vector< std::vector<int> > insnum_idx, in
   for (int j=insnum_idx[first_insnum].size()-1; j>=0; j--) {
     int pv_idx = insnum_idx[first_insnum][j];
     if (pv_idx < (cur_idx-1)) {
-          VLOG(0) << "in del2pv, should deleted first_insnum=" << first_insnum
+          VLOG(5) << "in del2pv, should deleted first_insnum=" << first_insnum
                  << ", sec_insnum=" << sec_insnum
                 << ", cur_idx=" << cur_idx
                 << ", before swap, curidx_insnum=" << input_pv_ins_[cur_idx-1]->ads.size()
@@ -2069,7 +2104,7 @@ int PadBoxSlotDataset::delete_2pv(std::vector< std::vector<int> > insnum_idx, in
 
       std::swap(input_pv_ins_[pv_idx], input_pv_ins_[cur_idx-1]);
       find1 = true;
-            VLOG(0) << "in del2pv, should deleted first_insnum=" << first_insnum
+            VLOG(5) << "in del2pv, should deleted first_insnum=" << first_insnum
                  << ", sec_insnum=" << sec_insnum
                 << ", after swap, curidx_insnum=" << input_pv_ins_[cur_idx-1]->ads.size()
                 << ", insnum_s_idx=" << pv_idx
@@ -2084,7 +2119,7 @@ int PadBoxSlotDataset::delete_2pv(std::vector< std::vector<int> > insnum_idx, in
   for (int j=insnum_idx[sec_insnum].size()-1; j>=0; j--) {
     int pv_idx = insnum_idx[sec_insnum][j];
     if (pv_idx < (cur_idx-1)) {
-        VLOG(0) << "in del2pv, should deleted first_insnum=" << first_insnum
+        VLOG(5) << "in del2pv, should deleted first_insnum=" << first_insnum
                  << ", sec_insnum=" << sec_insnum
                 << ", cur_idx=" << cur_idx
                 << ", before swap, curidx_insnum=" << input_pv_ins_[cur_idx]->ads.size()
@@ -2093,7 +2128,7 @@ int PadBoxSlotDataset::delete_2pv(std::vector< std::vector<int> > insnum_idx, in
 
       std::swap(input_pv_ins_[pv_idx], input_pv_ins_[cur_idx]);
       find2 = true;
-            VLOG(0) << "in del2pv, should deleted first_insnum=" << first_insnum
+            VLOG(5) << "in del2pv, should deleted first_insnum=" << first_insnum
                  << ", sec_insnum=" << sec_insnum
                 << ", cur_idx=" << cur_idx
                 << ", after swap, curidx_insnum=" << input_pv_ins_[cur_idx]->ads.size()
@@ -2123,14 +2158,14 @@ int PadBoxSlotDataset::delete_n_same_pv(std::vector< std::vector<int> > insnum_i
   if (max_pv_idx < (cur_idx - nsame + 1)) {
     for (int k=0; k<nsame; k++) {
       int pv_idx = insnum_idx[insnum][k];
-        VLOG(0) << "in del n,1, should deleted insnum=" << insnum << ", geshu=" << nsame
+        VLOG(5) << "in del n,1, should deleted insnum=" << insnum << ", geshu=" << nsame
                 << ", cur_idx=" << cur_idx - k
                 << ", before swap, curidx_insnum=" << input_pv_ins_[cur_idx-k]->ads.size()
                 << ", insnum_s_idx=" << pv_idx
                 << ", pvidx_insnum=" << input_pv_ins_[pv_idx]->ads.size();
 
       std::swap(input_pv_ins_[pv_idx], input_pv_ins_[cur_idx-k]);
-        VLOG(0) << "in del n,1, should deleted insnum=" << insnum << ", n=" << nsame
+        VLOG(5) << "in del n,1, should deleted insnum=" << insnum << ", n=" << nsame
                 << ", cur_idx=" << cur_idx - k
                 << ", after swap, curidx_insnum=" << input_pv_ins_[cur_idx-k]->ads.size()
                 << ", insnum_s_idx=" << pv_idx
@@ -2142,7 +2177,7 @@ int PadBoxSlotDataset::delete_n_same_pv(std::vector< std::vector<int> > insnum_i
       int n = input_pv_ins_[cur_idx-k]->ads.size();
       if (n != insnum) {
         int pv_idx = insnum_idx[insnum][k];
-                VLOG(0) << "in del n,2, " << "k=" << k
+                VLOG(5) << "in del n,2, " << "k=" << k
                 << " should deleted insnum=" << insnum << ", geshu=" << nsame
                 << ", cur_idx=" << cur_idx - k
                 << ", before swap, curidx_insnum=" << input_pv_ins_[cur_idx-k]->ads.size()
@@ -2150,7 +2185,7 @@ int PadBoxSlotDataset::delete_n_same_pv(std::vector< std::vector<int> > insnum_i
                 << ", pvidx_insnum=" << input_pv_ins_[pv_idx]->ads.size();
 
         std::swap(input_pv_ins_[pv_idx], input_pv_ins_[cur_idx-k]);
-        VLOG(0) << "in del n,2, " << "k=" << k 
+        VLOG(5) << "in del n,2, " << "k=" << k 
                 << "should deleted insnum=" << insnum << ", n=" << nsame
                 << ", cur_idx=" << cur_idx - k
                 << ", after swap, curidx_insnum=" << input_pv_ins_[cur_idx-k]->ads.size()
@@ -2158,7 +2193,7 @@ int PadBoxSlotDataset::delete_n_same_pv(std::vector< std::vector<int> > insnum_i
                 << ", pvidx_insnum=" << input_pv_ins_[pv_idx]->ads.size();
 
       } else {
-          VLOG(0) << "should deleted insnum=" << insnum
+          VLOG(5) << "should deleted insnum=" << insnum
                   << "cur_idx-k_s_insnum=" << n;
       }
     }
@@ -2402,7 +2437,7 @@ void PadBoxSlotDataset::compute_batch_num_pvins(const int64_t ins_num, const int
   // less data
   if (static_cast<int64_t>(thread_batch_num) > ins_num) {
     LOG(WARNING) << "thread_batch_num > ins_num and return, total_ins_num " << ins_num << ", thread_batch_num  " << thread_batch_num;
-    compute_left_batch_num(ins_num, thread_num, offset, 0);
+    compute_left_batch_num_pvins(ins_num, thread_num, offset, 0);
     return;
   }
 
@@ -2449,7 +2484,7 @@ int PadBoxSlotDataset::compute_thread_batch_nccl_pvins(
     const int minibatch_size, std::vector<std::pair<int, int>>* nccl_offsets) {
   int thread_avg_batch_num = 0;
   if (total_instance_num < static_cast<int64_t>(thr_num)) {
-    LOG(WARNING) << "compute_thread_batch_nccl total ins num:["
+    LOG(WARNING) << "compute_thread_batch_nccl_pvins total ins num:["
                  << total_instance_num << "], less thread num:[" << thr_num
                  << "]";
     return thread_avg_batch_num;
@@ -2540,8 +2575,13 @@ void PadBoxSlotDataset::PrepareTrain(void) {
     // 分数据到各线程里面
     int batchsize = reinterpret_cast<SlotPaddleBoxDataFeed*>(readers_[0].get())
                         ->GetPvBatchSize();
-    //compute_thread_batch_nccl(thread_num_, GetPvDataSize(), batchsize, &offset);
-    compute_thread_batch_nccl_pvins(thread_num_, GetPvDataSize(), batchsize, &offset);
+    if (!enable_batch_insnum_mul8_) {
+        VLOG(0) << "false, enable_batch_insnum_mul8=" << enable_batch_insnum_mul8_;
+        compute_thread_batch_nccl(thread_num_, GetPvDataSize(), batchsize, &offset, enable_batch_insnum_mul8_);
+    } else {
+        VLOG(0) << "enable_batch_insnum_mul8=" << enable_batch_insnum_mul8_;
+        compute_thread_batch_nccl_pvins(thread_num_, GetPvDataSize(), batchsize, &offset);
+    }
     for (int i = 0; i < thread_num_; ++i) {
       reinterpret_cast<SlotPaddleBoxDataFeed*>(readers_[i].get())
           ->SetPvInstance(&input_pv_ins_[0]);
@@ -2557,7 +2597,7 @@ void PadBoxSlotDataset::PrepareTrain(void) {
     int batchsize = reinterpret_cast<SlotPaddleBoxDataFeed*>(readers_[0].get())
                         ->GetBatchSize();
     compute_thread_batch_nccl(thread_num_, GetMemoryDataSize(), batchsize,
-                              &offset);
+                              &offset, enable_batch_insnum_mul8_);
     for (int i = 0; i < thread_num_; ++i) {
       reinterpret_cast<SlotPaddleBoxDataFeed*>(readers_[i].get())
           ->SetSlotRecord(&input_records_[0]);

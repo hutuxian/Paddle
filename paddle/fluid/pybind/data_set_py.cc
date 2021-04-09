@@ -279,6 +279,8 @@ void BindDataset(py::module *m) {
            py::call_guard<py::gil_scoped_release>())
       .def("set_enable_pv_merge", &framework::Dataset::SetEnablePvMerge,
            py::call_guard<py::gil_scoped_release>())
+      .def("set_enable_batch_insnum_mul8", &framework::Dataset::SetEnableBatchInsnumMul8,
+           py::call_guard<py::gil_scoped_release>())
 
       .def("set_merge_by_lineid", &framework::Dataset::SetMergeByInsId,
            py::call_guard<py::gil_scoped_release>())
