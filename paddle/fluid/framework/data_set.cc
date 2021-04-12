@@ -36,8 +36,8 @@
 #endif
 
 DECLARE_bool(padbox_dataset_disable_shuffle);
-DECLARE_bool(padbox_dataset_disable_polling);
 
+// USE_INT_STAT(STAT_total_feasign_num_in_mem);
 namespace paddle {
 namespace framework {
 
@@ -101,10 +101,9 @@ void DatasetImpl<T>::SetHdfsConfig(const std::string& fs_name,
                                    const std::string& fs_ugi) {
   fs_name_ = fs_name;
   fs_ugi_ = fs_ugi;
-  std::string cmd = std::string("$HADOOP_HOME/bin/hadoop fs");
+  std::string cmd = std::string("hadoop fs");
   cmd += " -D fs.default.name=" + fs_name;
   cmd += " -D hadoop.job.ugi=" + fs_ugi;
-  cmd += " -Ddfs.client.block.write.retries=15 -Ddfs.rpc.timeout=500000";
   paddle::framework::hdfs_set_command(cmd);
 }
 
@@ -317,6 +316,7 @@ void DatasetImpl<T>::ReleaseMemory() {
 }
 template <typename T>
 void DatasetImpl<T>::ReleaseMemoryFun() {
+  VLOG(0) << "DatasetImpl<T>::ReleaseMemory() begin";
   if (input_channel_) {
     input_channel_->Clear();
     input_channel_ = nullptr;
@@ -362,7 +362,7 @@ void DatasetImpl<T>::ReleaseMemoryFun() {
   input_records_.clear();
   std::vector<T>().swap(input_records_);
   std::vector<T>().swap(slots_shuffle_original_data_);
-  VLOG(3) << "DatasetImpl<T>::ReleaseMemory() end";
+  VLOG(0) << "DatasetImpl<T>::ReleaseMemory() end";
   VLOG(3) << "total_feasign_num_(" << STAT_GET(STAT_total_feasign_num_in_mem)
           << ") - current_fea_num_(" << total_fea_num_ << ") = ("
           << STAT_GET(STAT_total_feasign_num_in_mem) - total_fea_num_
@@ -774,6 +774,7 @@ int64_t DatasetImpl<T>::GetPvDataSize() {
   if (enable_pv_merge_) {
     return input_pv_channel_->Size();
   } else {
+    VLOG(0) << "It does not merge pv..";
     return 0;
   }
 }
@@ -1434,7 +1435,7 @@ void PadBoxSlotDataset::CreateChannel() {
 // set filelist, file_idx_ will reset to zero.
 void PadBoxSlotDataset::SetFileList(const std::vector<std::string>& filelist) {
   VLOG(3) << "filelist size: " << filelist.size();
-  if (mpi_size_ > 1 && !FLAGS_padbox_dataset_disable_polling) {
+  if (mpi_size_ > 1) {
     // dualbox
     int num = static_cast<int>(filelist.size());
     for (int i = mpi_rank_; i < num; i = i + mpi_size_) {
@@ -1844,13 +1845,6 @@ void PadBoxSlotDataset::PreprocessInstance() {
     return;
   }
 
-  if (!input_pv_ins_.empty()) {  // for auc runner
-    for (auto pv : input_pv_ins_) {
-      delete pv;
-    }
-    input_pv_ins_.clear();
-  }
-
   size_t all_records_num = input_records_.size();
   std::sort(input_records_.data(), input_records_.data() + all_records_num,
             [](const SlotRecord& lhs, const SlotRecord& rhs) {
@@ -1901,162 +1895,8 @@ static void compute_left_batch_num(const int ins_num, const int thread_num,
   }
 }
 
-/**
- * @Brief
- * Split the remaining data to each thread
- */
-static void compute_left_batch_num_mul8(const int ins_num, const int thread_num,
-                                   std::vector<std::pair<int, int>>* offset,
-                                   const int start_pos) {
-  int cur_pos = start_pos;
-  int batch_size = ins_num / thread_num;
-  int left_num = ins_num % thread_num;
 
-  batch_size = batch_size - batch_size % 8;
-  left_num = left_num + thread_num * (batch_size % 8);
-
-  LOG(WARNING) << "in compute_left_batch_num_mul8, total left ins_num  " << ins_num 
-        << ", batch_size_for_left_ins " << batch_size << ", left_num " << left_num;
-
-  for (int i = 0; i < thread_num; ++i) {
-    int batch_num_size = batch_size;
-    if (i == 0) {
-      //batch_num_size = batch_num_size + left_num;
-      int true_left_num = left_num % 8;
-      batch_num_size = batch_num_size + (left_num - true_left_num);
-
-      LOG(WARNING) << "thread id0, in compute_left_batch_num_mul8, total left ins_num  " << ins_num 
-        << ", batch_size_for_left_ins " << batch_size << ", left_num " << true_left_num
-        << ", true_left_num " << true_left_num;
-    }
-    offset->push_back(std::make_pair(cur_pos, batch_num_size));
-    cur_pos += batch_num_size;
-  }
-}
-
-/**
- * @brief
- * distributed to each thread according to the amount of data
- */
-static void compute_batch_num(const int64_t ins_num, const int batch_size,
-                              const int thread_num,
-                              std::vector<std::pair<int, int>>* offset,
-                              bool enable_batch_insnum_mul8 = false) {
-  int thread_batch_num = batch_size * thread_num;
-  LOG(WARNING) << "in compute_batch_num, thread_batch_num  " << thread_batch_num 
-      << ", batch_size " << batch_size << ", thread_num " << thread_num;
-  // less data
-  if (static_cast<int64_t>(thread_batch_num) > ins_num) {
-    LOG(WARNING) << "thread_batch_num > ins_num and return, total_ins_num " << ins_num << ", thread_batch_num  " << thread_batch_num;
-    if (!enable_batch_insnum_mul8) {
-        compute_left_batch_num(ins_num, thread_num, offset, 0);
-    } else {
-        compute_left_batch_num_mul8(ins_num, thread_num, offset, 0);
-    }
-    return;
-  }
-
-  int cur_pos = 0;
-  int offset_num = static_cast<int>(ins_num / thread_batch_num) * thread_num;
-  int left_ins_num = static_cast<int>(ins_num % thread_batch_num);
-  if (left_ins_num > 0 && left_ins_num < thread_num) {
-    offset_num = offset_num - thread_num;
-    left_ins_num = left_ins_num + thread_batch_num;
-    for (int i = 0; i < offset_num; ++i) {
-      offset->push_back(std::make_pair(cur_pos, batch_size));
-      cur_pos += batch_size;
-    }
-    // split data to thread avg two rounds
-    if (!enable_batch_insnum_mul8) {
-        compute_left_batch_num(left_ins_num, thread_num * 2, offset, cur_pos);
-    } else {
-        compute_left_batch_num_mul8(left_ins_num, thread_num * 2, offset, cur_pos);
-    }
-  } else {
-    for (int i = 0; i < offset_num; ++i) {
-      offset->push_back(std::make_pair(cur_pos, batch_size));
-      cur_pos += batch_size;
-    }
-    if (left_ins_num > 0) {
-      if (!enable_batch_insnum_mul8) {
-        compute_left_batch_num(left_ins_num, thread_num, offset, cur_pos);
-      } else {
-        compute_left_batch_num_mul8(left_ins_num, thread_num, offset, cur_pos);
-      }
-    }
-  }
-}
-
-//compute_thread_batch_nccl(thread_num_, GetPvDataSize(), batchsize, &offset);
-static int compute_thread_batch_nccl(
-    const int thr_num, const int64_t total_instance_num,
-    const int minibatch_size, std::vector<std::pair<int, int>>* nccl_offsets,
-    bool enable_batch_insnum_mul8 = false) {
-  int thread_avg_batch_num = 0;
-  if (total_instance_num < static_cast<int64_t>(thr_num)) {
-    LOG(WARNING) << "compute_thread_batch_nccl total ins num:["
-                 << total_instance_num << "], less thread num:[" << thr_num
-                 << "]";
-    return thread_avg_batch_num;
-  }
-
-  auto& offset = (*nccl_offsets);
-  // split data avg by thread num
-  compute_batch_num(total_instance_num, minibatch_size, thr_num, &offset, enable_batch_insnum_mul8);
-  thread_avg_batch_num = static_cast<int>(offset.size() / thr_num);
-
-  auto& mpi = boxps::MPICluster::Ins();
-  if (mpi.size() > 1) {
-    // 这里主要针对NCCL需要相同的minibatch才能正常处理
-    int thread_max_batch_num = mpi.allreduce(thread_avg_batch_num, 0);
-    int64_t sum_total_ins_num = mpi.allreduce(total_instance_num, 2);
-    int diff_batch_num = thread_max_batch_num - thread_avg_batch_num;
-    if (diff_batch_num == 0) {
-      LOG(WARNING) << "total sum ins " << sum_total_ins_num << ", thread_num "
-                   << thr_num << ", ins num " << total_instance_num
-                   << ", batch num " << offset.size()
-                   << ", thread avg batch num " << thread_avg_batch_num;
-      return thread_avg_batch_num;
-    }
-
-    int need_ins_num = thread_max_batch_num * thr_num;
-    // data is too less
-    if ((int64_t)need_ins_num > total_instance_num) {
-      LOG(FATAL) << "error instance num:[" << total_instance_num
-                 << "] less need ins num:[" << need_ins_num << "]";
-      return thread_avg_batch_num;
-    }
-
-    int need_batch_num = (diff_batch_num + 1) * thr_num;
-    int offset_split_index = static_cast<int>(offset.size() - thr_num);
-    int split_left_num = total_instance_num - offset[offset_split_index].first;
-    while (split_left_num < need_batch_num) {
-      need_batch_num += thr_num;
-      offset_split_index -= thr_num;
-      split_left_num = total_instance_num - offset[offset_split_index].first;
-    }
-    int split_start = offset[offset_split_index].first;
-    offset.resize(offset_split_index);
-    compute_left_batch_num(split_left_num, need_batch_num, &offset,
-                           split_start);
-    LOG(WARNING) << "total sum ins " << sum_total_ins_num << ", thread_num "
-                 << thr_num << ", ins num " << total_instance_num
-                 << ", batch num " << offset.size() << ", thread avg batch num "
-                 << thread_avg_batch_num << ", thread max batch num "
-                 << thread_max_batch_num
-                 << ", need batch num: " << (need_batch_num / thr_num)
-                 << "split begin (" << split_start << ")" << split_start
-                 << ", num " << split_left_num;
-    thread_avg_batch_num = thread_max_batch_num;
-  } else {
-    LOG(WARNING) << "thread_num " << thr_num << ", ins num "
-                 << total_instance_num << ", batch num " << offset.size()
-                 << ", thread avg batch num " << thread_avg_batch_num;
-  }
-  return thread_avg_batch_num;
-}
-
-// shenxing
+//sx: delete one pv 
 int PadBoxSlotDataset::delete_1pv(std::vector< std::vector<int> > insnum_idx, int insnum, int cur_idx) {
   bool find = false;
   for (int j=insnum_idx[insnum].size()-1; j>=0; j--) {
@@ -2088,6 +1928,7 @@ int PadBoxSlotDataset::delete_1pv(std::vector< std::vector<int> > insnum_idx, in
   }
 }
 
+//sx: delete two pvs, each pv has different insnum
 int PadBoxSlotDataset::delete_2pv(std::vector< std::vector<int> > insnum_idx, int first_insnum, int sec_insnum, int cur_idx) {
   // first_insnum != sec_insnum
   bool find1 = false;
@@ -2148,6 +1989,7 @@ int PadBoxSlotDataset::delete_2pv(std::vector< std::vector<int> > insnum_idx, in
   }
 }
 
+//sx: delete n pv that have the same insnum
 int PadBoxSlotDataset::delete_n_same_pv(std::vector< std::vector<int> > insnum_idx, int nsame, int insnum, int cur_idx) {
   if (int(insnum_idx[insnum].size()) < nsame) {
       return -1;
@@ -2201,6 +2043,7 @@ int PadBoxSlotDataset::delete_n_same_pv(std::vector< std::vector<int> > insnum_i
   return nsame;
 }
 
+//sx
 int PadBoxSlotDataset::pv_batch_insnum_mul8(int ins_num, int batch_size, int start_idx, int thread_batch_num, int offset_num, int left_ins_num, std::vector<std::pair<int, int>>* offset) {
     std::vector< std::vector<int> > insnum_idx(20); // one pv insnum -> pv idx, one pv insnum = 1 2 3 4 5;
     VLOG(3) << "offset_num=" << offset_num
@@ -2388,6 +2231,7 @@ int PadBoxSlotDataset::pv_batch_insnum_mul8(int ins_num, int batch_size, int sta
     return start_idx;
 }
 
+//sx
 void PadBoxSlotDataset::compute_left_batch_num_pvins(const int ins_num, const int thread_num,
                                    std::vector<std::pair<int, int>>* offset,
                                    const int start_pos) {
@@ -2427,7 +2271,7 @@ void PadBoxSlotDataset::compute_left_batch_num_pvins(const int ins_num, const in
           << ", the last thread true insnum=" << last_thread_insnum;
 }
 
-//sx: pvins num is multiple of 4
+//sx: The insnum of each pv batch can be divisible by 8
 void PadBoxSlotDataset::compute_batch_num_pvins(const int64_t ins_num, const int batch_size,
                               const int thread_num,
                               std::vector<std::pair<int, int>>* offset) {
@@ -2479,12 +2323,120 @@ void PadBoxSlotDataset::compute_batch_num_pvins(const int64_t ins_num, const int
   }// end else
 }
 
-int PadBoxSlotDataset::compute_thread_batch_nccl_pvins(
+//sx
+/**
+ * @Brief
+ * Let the insnum of each thread can be divisible by 8
+**/
+static void compute_left_batch_num_mul8(const int ins_num, const int thread_num,
+                                   std::vector<std::pair<int, int>>* offset,
+                                   const int start_pos) {
+  int cur_pos = start_pos;
+  int batch_size = ins_num / thread_num;
+  int left_num = ins_num % thread_num;
+
+  batch_size = batch_size - batch_size % 8;
+  left_num = left_num + thread_num * (batch_size % 8);
+
+  LOG(WARNING) << "in compute_left_batch_num_mul8, total left ins_num  " << ins_num 
+        << ", batch_size_for_left_ins " << batch_size << ", left_num " << left_num;
+
+  for (int i = 0; i < thread_num; ++i) {
+    int batch_num_size = batch_size;
+    if (i == 0) {
+      //batch_num_size = batch_num_size + left_num;
+      int true_left_num = left_num % 8;
+      batch_num_size = batch_num_size + (left_num - true_left_num);
+
+      LOG(WARNING) << "thread id0, in compute_left_batch_num_mul8, total left ins_num  " << ins_num 
+        << ", batch_size_for_left_ins " << batch_size << ", left_num " << true_left_num
+        << ", true_left_num " << true_left_num;
+    }
+    offset->push_back(std::make_pair(cur_pos, batch_num_size));
+    cur_pos += batch_num_size;
+  }
+}
+
+//sx: The insnum of each normal batch can be divisible by 8
+static void compute_batch_num_normins(const int64_t ins_num, const int batch_size,
+                              const int thread_num,
+                              std::vector<std::pair<int, int>>* offset) {
+  int thread_batch_num = batch_size * thread_num;
+  LOG(WARNING) << "in compute_batch_num_normins, thread_batch_num  " << thread_batch_num 
+      << ", batch_size " << batch_size << ", thread_num " << thread_num;
+  // less data
+  if (static_cast<int64_t>(thread_batch_num) > ins_num) {
+    LOG(WARNING) << "thread_batch_num > ins_num and return, total_ins_num " << ins_num << ", thread_batch_num  " << thread_batch_num;
+    compute_left_batch_num_mul8(ins_num, thread_num, offset, 0);
+    return;
+  }
+
+  int cur_pos = 0;
+  int offset_num = static_cast<int>(ins_num / thread_batch_num) * thread_num;
+  int left_ins_num = static_cast<int>(ins_num % thread_batch_num);
+  if (left_ins_num > 0 && left_ins_num < thread_num) {
+    offset_num = offset_num - thread_num;
+    left_ins_num = left_ins_num + thread_batch_num;
+    for (int i = 0; i < offset_num; ++i) {
+      offset->push_back(std::make_pair(cur_pos, batch_size));
+      cur_pos += batch_size;
+    }
+    // split data to thread avg two rounds
+    compute_left_batch_num_mul8(left_ins_num, thread_num * 2, offset, cur_pos);
+  } else {
+    for (int i = 0; i < offset_num; ++i) {
+      offset->push_back(std::make_pair(cur_pos, batch_size));
+      cur_pos += batch_size;
+    }
+    if (left_ins_num > 0) {
+      compute_left_batch_num_mul8(left_ins_num, thread_num, offset, cur_pos);
+    }
+  }
+}
+
+/**
+ * @brief
+ * distributed to each thread according to the amount of data
+ */
+static void compute_batch_num(const int64_t ins_num, const int batch_size,
+                              const int thread_num,
+                              std::vector<std::pair<int, int>>* offset) {
+  int thread_batch_num = batch_size * thread_num;
+  // less data
+  if (static_cast<int64_t>(thread_batch_num) > ins_num) {
+    compute_left_batch_num(ins_num, thread_num, offset, 0);
+    return;
+  }
+
+  int cur_pos = 0;
+  int offset_num = static_cast<int>(ins_num / thread_batch_num) * thread_num;
+  int left_ins_num = static_cast<int>(ins_num % thread_batch_num);
+  if (left_ins_num > 0 && left_ins_num < thread_num) {
+    offset_num = offset_num - thread_num;
+    left_ins_num = left_ins_num + thread_batch_num;
+    for (int i = 0; i < offset_num; ++i) {
+      offset->push_back(std::make_pair(cur_pos, batch_size));
+      cur_pos += batch_size;
+    }
+    // split data to thread avg two rounds
+    compute_left_batch_num(left_ins_num, thread_num * 2, offset, cur_pos);
+  } else {
+    for (int i = 0; i < offset_num; ++i) {
+      offset->push_back(std::make_pair(cur_pos, batch_size));
+      cur_pos += batch_size;
+    }
+    if (left_ins_num > 0) {
+      compute_left_batch_num(left_ins_num, thread_num, offset, cur_pos);
+    }
+  }
+}
+
+static int compute_thread_batch_nccl(
     const int thr_num, const int64_t total_instance_num,
     const int minibatch_size, std::vector<std::pair<int, int>>* nccl_offsets) {
   int thread_avg_batch_num = 0;
   if (total_instance_num < static_cast<int64_t>(thr_num)) {
-    LOG(WARNING) << "compute_thread_batch_nccl_pvins total ins num:["
+    LOG(WARNING) << "compute_thread_batch_nccl total ins num:["
                  << total_instance_num << "], less thread num:[" << thr_num
                  << "]";
     return thread_avg_batch_num;
@@ -2492,7 +2444,7 @@ int PadBoxSlotDataset::compute_thread_batch_nccl_pvins(
 
   auto& offset = (*nccl_offsets);
   // split data avg by thread num
-  compute_batch_num_pvins(total_instance_num, minibatch_size, thr_num, &offset);
+  compute_batch_num(total_instance_num, minibatch_size, thr_num, &offset);
   thread_avg_batch_num = static_cast<int>(offset.size() / thr_num);
 
   auto& mpi = boxps::MPICluster::Ins();
@@ -2546,6 +2498,149 @@ int PadBoxSlotDataset::compute_thread_batch_nccl_pvins(
   return thread_avg_batch_num;
 }
 
+//sx
+int PadBoxSlotDataset::compute_thread_batch_nccl_pvins(
+    const int thr_num, const int64_t total_instance_num,
+    const int minibatch_size, std::vector<std::pair<int, int>>* nccl_offsets) {
+  int thread_avg_batch_num = 0;
+  if (total_instance_num < static_cast<int64_t>(thr_num)) {
+    LOG(WARNING) << "compute_thread_batch_nccl_pvins total ins num:["
+                 << total_instance_num << "], less thread num:[" << thr_num
+                 << "]";
+    return thread_avg_batch_num;
+  }
+
+  auto& offset = (*nccl_offsets);
+  // split data avg by thread num
+  compute_batch_num_pvins(total_instance_num, minibatch_size, thr_num, &offset);
+  thread_avg_batch_num = static_cast<int>(offset.size() / thr_num);
+  LOG(WARNING) << "thread_num " << thr_num << ", ins num "
+               << total_instance_num << ", batch num " << offset.size()
+               << ", thread avg batch num " << thread_avg_batch_num;
+
+  /*auto& mpi = boxps::MPICluster::Ins();
+  if (mpi.size() > 1) {
+    // 这里主要针对NCCL需要相同的minibatch才能正常处理
+    int thread_max_batch_num = mpi.allreduce(thread_avg_batch_num, 0);
+    int64_t sum_total_ins_num = mpi.allreduce(total_instance_num, 2);
+    int diff_batch_num = thread_max_batch_num - thread_avg_batch_num;
+    if (diff_batch_num == 0) {
+      LOG(WARNING) << "total sum ins " << sum_total_ins_num << ", thread_num "
+                   << thr_num << ", ins num " << total_instance_num
+                   << ", batch num " << offset.size()
+                   << ", thread avg batch num " << thread_avg_batch_num;
+      return thread_avg_batch_num;
+    }
+
+    int need_ins_num = thread_max_batch_num * thr_num;
+    // data is too less
+    if ((int64_t)need_ins_num > total_instance_num) {
+      LOG(FATAL) << "error instance num:[" << total_instance_num
+                 << "] less need ins num:[" << need_ins_num << "]";
+      return thread_avg_batch_num;
+    }
+
+    int need_batch_num = (diff_batch_num + 1) * thr_num;
+    int offset_split_index = static_cast<int>(offset.size() - thr_num);
+    int split_left_num = total_instance_num - offset[offset_split_index].first;
+    while (split_left_num < need_batch_num) {
+      need_batch_num += thr_num;
+      offset_split_index -= thr_num;
+      split_left_num = total_instance_num - offset[offset_split_index].first;
+    }
+    int split_start = offset[offset_split_index].first;
+    offset.resize(offset_split_index);
+    compute_left_batch_num(split_left_num, need_batch_num, &offset,
+                           split_start);
+    LOG(WARNING) << "total sum ins " << sum_total_ins_num << ", thread_num "
+                 << thr_num << ", ins num " << total_instance_num
+                 << ", batch num " << offset.size() << ", thread avg batch num "
+                 << thread_avg_batch_num << ", thread max batch num "
+                 << thread_max_batch_num
+                 << ", need batch num: " << (need_batch_num / thr_num)
+                 << "split begin (" << split_start << ")" << split_start
+                 << ", num " << split_left_num;
+    thread_avg_batch_num = thread_max_batch_num;
+  } else {
+    LOG(WARNING) << "thread_num " << thr_num << ", ins num "
+                 << total_instance_num << ", batch num " << offset.size()
+                 << ", thread avg batch num " << thread_avg_batch_num;
+  }*/
+  return thread_avg_batch_num;
+}
+
+//sx
+static int compute_thread_batch_nccl_normins(
+    const int thr_num, const int64_t total_instance_num,
+    const int minibatch_size, std::vector<std::pair<int, int>>* nccl_offsets) {
+  int thread_avg_batch_num = 0;
+  if (total_instance_num < static_cast<int64_t>(thr_num)) {
+    LOG(WARNING) << "compute_thread_batch_nccl_normins total ins num:["
+                 << total_instance_num << "], less thread num:[" << thr_num
+                 << "]";
+    return thread_avg_batch_num;
+  }
+
+  auto& offset = (*nccl_offsets);
+  // split data avg by thread num
+  compute_batch_num_normins(total_instance_num, minibatch_size, thr_num, &offset);
+  thread_avg_batch_num = static_cast<int>(offset.size() / thr_num);
+
+  LOG(WARNING) << "thread_num " << thr_num << ", ins num "
+               << total_instance_num << ", batch num " << offset.size()
+               << ", thread avg batch num " << thread_avg_batch_num;
+
+  /*auto& mpi = boxps::MPICluster::Ins();
+  if (mpi.size() > 1) {
+    // 这里主要针对NCCL需要相同的minibatch才能正常处理
+    int thread_max_batch_num = mpi.allreduce(thread_avg_batch_num, 0);
+    int64_t sum_total_ins_num = mpi.allreduce(total_instance_num, 2);
+    int diff_batch_num = thread_max_batch_num - thread_avg_batch_num;
+    if (diff_batch_num == 0) {
+      LOG(WARNING) << "total sum ins " << sum_total_ins_num << ", thread_num "
+                   << thr_num << ", ins num " << total_instance_num
+                   << ", batch num " << offset.size()
+                   << ", thread avg batch num " << thread_avg_batch_num;
+      return thread_avg_batch_num;
+    }
+
+    int need_ins_num = thread_max_batch_num * thr_num;
+    // data is too less
+    if ((int64_t)need_ins_num > total_instance_num) {
+      LOG(FATAL) << "error instance num:[" << total_instance_num
+                 << "] less need ins num:[" << need_ins_num << "]";
+      return thread_avg_batch_num;
+    }
+
+    int need_batch_num = (diff_batch_num + 1) * thr_num;
+    int offset_split_index = static_cast<int>(offset.size() - thr_num);
+    int split_left_num = total_instance_num - offset[offset_split_index].first;
+    while (split_left_num < need_batch_num) {
+      need_batch_num += thr_num;
+      offset_split_index -= thr_num;
+      split_left_num = total_instance_num - offset[offset_split_index].first;
+    }
+    int split_start = offset[offset_split_index].first;
+    offset.resize(offset_split_index);
+    compute_left_batch_num(split_left_num, need_batch_num, &offset,
+                           split_start);
+    LOG(WARNING) << "total sum ins " << sum_total_ins_num << ", thread_num "
+                 << thr_num << ", ins num " << total_instance_num
+                 << ", batch num " << offset.size() << ", thread avg batch num "
+                 << thread_avg_batch_num << ", thread max batch num "
+                 << thread_max_batch_num
+                 << ", need batch num: " << (need_batch_num / thr_num)
+                 << "split begin (" << split_start << ")" << split_start
+                 << ", num " << split_left_num;
+    thread_avg_batch_num = thread_max_batch_num;
+  } else {
+    LOG(WARNING) << "thread_num " << thr_num << ", ins num "
+                 << total_instance_num << ", batch num " << offset.size()
+                 << ", thread avg batch num " << thread_avg_batch_num;
+  }*/
+  return thread_avg_batch_num;
+}
+
 // dynamic adjust reader num
 void PadBoxSlotDataset::DynamicAdjustReadersNum(int thread_num) {
   if (thread_num_ == thread_num) {
@@ -2576,11 +2671,10 @@ void PadBoxSlotDataset::PrepareTrain(void) {
     int batchsize = reinterpret_cast<SlotPaddleBoxDataFeed*>(readers_[0].get())
                         ->GetPvBatchSize();
     if (!enable_batch_insnum_mul8_) {
-        VLOG(0) << "false, enable_batch_insnum_mul8=" << enable_batch_insnum_mul8_;
-        compute_thread_batch_nccl(thread_num_, GetPvDataSize(), batchsize, &offset, enable_batch_insnum_mul8_);
+      compute_thread_batch_nccl(thread_num_, GetPvDataSize(), batchsize, &offset);
     } else {
-        VLOG(0) << "enable_batch_insnum_mul8=" << enable_batch_insnum_mul8_;
-        compute_thread_batch_nccl_pvins(thread_num_, GetPvDataSize(), batchsize, &offset);
+      //VLOG(0) << "enable_batch_insnum_mul8=true.";
+      compute_thread_batch_nccl_pvins(thread_num_, GetPvDataSize(), batchsize, &offset);
     }
     for (int i = 0; i < thread_num_; ++i) {
       reinterpret_cast<SlotPaddleBoxDataFeed*>(readers_[i].get())
@@ -2596,8 +2690,14 @@ void PadBoxSlotDataset::PrepareTrain(void) {
     // 分数据到各线程里面
     int batchsize = reinterpret_cast<SlotPaddleBoxDataFeed*>(readers_[0].get())
                         ->GetBatchSize();
-    compute_thread_batch_nccl(thread_num_, GetMemoryDataSize(), batchsize,
-                              &offset, enable_batch_insnum_mul8_);
+    if (!enable_batch_insnum_mul8_) {
+      compute_thread_batch_nccl(thread_num_, GetMemoryDataSize(), batchsize,
+                              &offset);
+    } else {
+      //VLOG(0) << "enable_batch_insnum_mul8=true.";
+      compute_thread_batch_nccl_normins(thread_num_, GetMemoryDataSize(), batchsize,
+                              &offset);
+    }
     for (int i = 0; i < thread_num_; ++i) {
       reinterpret_cast<SlotPaddleBoxDataFeed*>(readers_[i].get())
           ->SetSlotRecord(&input_records_[0]);
