@@ -36,6 +36,7 @@
 #endif
 
 DECLARE_bool(padbox_dataset_disable_shuffle);
+DECLARE_bool(padbox_dataset_disable_polling);
 
 // USE_INT_STAT(STAT_total_feasign_num_in_mem);
 namespace paddle {
@@ -101,9 +102,10 @@ void DatasetImpl<T>::SetHdfsConfig(const std::string& fs_name,
                                    const std::string& fs_ugi) {
   fs_name_ = fs_name;
   fs_ugi_ = fs_ugi;
-  std::string cmd = std::string("hadoop fs");
+  std::string cmd = std::string("$HADOOP_HOME/bin/hadoop fs");
   cmd += " -D fs.default.name=" + fs_name;
   cmd += " -D hadoop.job.ugi=" + fs_ugi;
+  cmd += " -Ddfs.client.block.write.retries=15 -Ddfs.rpc.timeout=500000";
   paddle::framework::hdfs_set_command(cmd);
 }
 
@@ -362,7 +364,7 @@ void DatasetImpl<T>::ReleaseMemoryFun() {
   input_records_.clear();
   std::vector<T>().swap(input_records_);
   std::vector<T>().swap(slots_shuffle_original_data_);
-  VLOG(0) << "DatasetImpl<T>::ReleaseMemory() end";
+  VLOG(3) << "DatasetImpl<T>::ReleaseMemory() end";
   VLOG(3) << "total_feasign_num_(" << STAT_GET(STAT_total_feasign_num_in_mem)
           << ") - current_fea_num_(" << total_fea_num_ << ") = ("
           << STAT_GET(STAT_total_feasign_num_in_mem) - total_fea_num_
@@ -1435,7 +1437,7 @@ void PadBoxSlotDataset::CreateChannel() {
 // set filelist, file_idx_ will reset to zero.
 void PadBoxSlotDataset::SetFileList(const std::vector<std::string>& filelist) {
   VLOG(3) << "filelist size: " << filelist.size();
-  if (mpi_size_ > 1) {
+  if (mpi_size_ > 1 && !FLAGS_padbox_dataset_disable_polling) {
     // dualbox
     int num = static_cast<int>(filelist.size());
     for (int i = mpi_rank_; i < num; i = i + mpi_size_) {
@@ -1843,6 +1845,13 @@ void PadBoxSlotDataset::PreprocessInstance() {
   }
   if (!enable_pv_merge_) {  // means to use Record
     return;
+  }
+
+  if (!input_pv_ins_.empty()) {  // for auc runner
+    for (auto pv : input_pv_ins_) {
+      delete pv;
+    }
+    input_pv_ins_.clear();
   }
 
   size_t all_records_num = input_records_.size();
