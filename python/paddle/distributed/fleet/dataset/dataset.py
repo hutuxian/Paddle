@@ -265,6 +265,7 @@ class InMemoryDataset(DatasetBase):
         self.parse_logkey = False
         self.merge_by_sid = True
         self.enable_pv_merge = False
+        self.enable_batch_insnum_mul8 = False
         self.merge_by_lineid = False
         self.fleet_send_sleep_seconds = None
 
@@ -523,6 +524,7 @@ class InMemoryDataset(DatasetBase):
         self.dataset.set_parse_logkey(self.parse_logkey)
         self.dataset.set_merge_by_sid(self.merge_by_sid)
         self.dataset.set_enable_pv_merge(self.enable_pv_merge)
+        self.dataset.set_enable_batch_insnum_mul8(self.enable_batch_insnum_mul8)
         self.dataset.set_data_feed_desc(self._desc())
         self.dataset.create_channel()
         self.dataset.create_readers()
@@ -1170,6 +1172,9 @@ class BoxPSDataset(InMemoryDataset):
         enable_pv_merge = kwargs.get("enable_pv_merge", False)
         self._set_enable_pv_merge(enable_pv_merge)
 
+        enable_batch_insnum_mul8 = kwargs.get("enable_batch_insnum_mul8", False)
+        self._set_enable_batch_insnum_mul8(enable_batch_insnum_mul8)
+
     def _set_rank_offset(self, rank_offset):
         """
         Set rank_offset for merge_pv. It set the message of Pv.
@@ -1253,6 +1258,11 @@ class BoxPSDataset(InMemoryDataset):
 
         """
         self.enable_pv_merge = enable_pv_merge
+
+    def _set_enable_batch_insnum_mul8(self, enable_batch_insnum_mul8):
+        """
+        """
+        self.enable_batch_insnum_mul8 = enable_batch_insnum_mul8
 
     def set_date(self, date):
         """

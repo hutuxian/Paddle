@@ -408,6 +408,7 @@ InMemoryDataFeed<T>::InMemoryDataFeed() {
   this->parse_content_ = false;
   this->parse_logkey_ = false;
   this->enable_pv_merge_ = false;
+  this->enable_batch_insnum_mul8_ = false;
   this->current_phase_ = 1;  // 1:join ;0:update
   this->input_channel_ = nullptr;
   this->output_channel_ = nullptr;
@@ -542,6 +543,11 @@ void InMemoryDataFeed<T>::SetParseLogKey(bool parse_logkey) {
 template <typename T>
 void InMemoryDataFeed<T>::SetEnablePvMerge(bool enable_pv_merge) {
   enable_pv_merge_ = enable_pv_merge;
+}
+
+template <typename T>
+void InMemoryDataFeed<T>::SetEnableBatchInsnumMul8(bool enable_batch_insnum_mul8) {
+  enable_batch_insnum_mul8_ = enable_batch_insnum_mul8;
 }
 
 template <typename T>

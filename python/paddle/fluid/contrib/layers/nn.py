@@ -51,6 +51,7 @@ from paddle.fluid.entry_attr import ProbabilityEntry, CountFilterEntry
 
 from paddle.fluid.framework import Variable, convert_np_dtype_to_dtype_
 from paddle.fluid.layers import slice, reshape
+from paddle.fluid.layers import fill_constant
 import warnings
 
 __all__ = [
@@ -60,7 +61,8 @@ __all__ = [
     'sparse_embedding', 'partial_sum', 'tdm_child', 'rank_attention',
     'tdm_sampler', 'batch_fc', '_pull_box_extended_sparse', 'bilateral_slice',
     'correlation', 'fused_bn_add_act', 'fused_seqpool_cvm',
-    'cross_norm_layer_hadamard', 'fused_seqpool_cvm_with_pcoc'
+    'cross_norm_layer_hadamard', 'fused_seqpool_cvm_with_pcoc',
+    'scaled_fc', 'scaled_fc_int8', 'scaled_cast', 'scaled_fc_and_scaled_cast', 'single_scaled_fc_linear_act'
 ]
 
 
@@ -2049,3 +2051,503 @@ def fused_bn_add_act(x,
         attrs=attrs)
 
     return batch_norm_out
+
+def scaled_fc(input,
+             param_size,
+             param_attr,
+             bias_size,
+             bias_attr,
+             input_scale_factor,
+             bias_scale_factor,
+             act=None):
+    """
+    **Scaled FC layer**
+    Notice: It currently supports GPU device.
+    Args:
+        input: Tensor with data type float32, float64, float16.
+        param_size: The size of w.
+        param_attr: Attribute initializer of w.
+        bias_size: The size of bias.
+        bias_attr: Attribute initializer of bias.
+        act: Activation to be applied to the output of this layer.
+        input_scale_factor: the scale of the input
+        bias_scale_factoe: the scale of the bias
+
+    Returns:
+        Variable: A Tensor with the same data type as input's.
+    """
+
+    helper = LayerHelper("scaled_fc", **locals())
+    check_type(input, 'input', (Variable), 'scaled_fc')
+    input_shape = input.shape
+
+    dtype = helper.input_dtype()
+    check_dtype(dtype, 'input', ['float32', 'float64', 'float16'], 'scaled_fc')
+
+    # cast input to fp16
+    input_casted = helper.create_variable_for_type_inference(dtype='float16')
+    helper.append_op(
+            type="cast",
+            inputs={'X': input},
+            outputs={'Out': input_casted},
+            attrs={'in_dtype': dtype, 'out_dtype': convert_np_dtype_to_dtype_("float16")})
+
+    # init fp32 weight & bias
+    w = helper.create_parameter(
+        attr=param_attr, shape=param_size, dtype='float32', is_bias=False)
+    b = helper.create_parameter(
+        attr=bias_attr, shape=bias_size, dtype='float32', is_bias=False)
+    pre_act = helper.create_variable_for_type_inference('float16')
+
+    # cast fp32 weight& bias to fp16
+    w_casted = helper.create_variable_for_type_inference(dtype='float16')
+    b_casted = helper.create_variable_for_type_inference(dtype='float16')
+
+    helper.append_op(
+            type="cast",
+            inputs={'X': w},
+            outputs={'Out': w_casted},
+            attrs={'in_dtype': w.dtype, 'out_dtype': convert_np_dtype_to_dtype_("float16")})
+    helper.append_op(
+            type="cast",
+            inputs={'X': b},
+            outputs={'Out': b_casted},
+            attrs={'in_dtype': b.dtype, 'out_dtype': convert_np_dtype_to_dtype_("float16")})
+
+    # scaled fc
+    helper.append_op(
+        type="scaled_fc",
+        inputs={"Input": input_casted,
+                "W": w_casted,
+                "Bias": b_casted},
+        attrs={'input_scale_factor': input_scale_factor, 'bias_scale_factor': bias_scale_factor},
+        outputs={"Out": pre_act})
+
+    # cast fc output to fp32
+    pre_act_casted = helper.create_variable_for_type_inference(dtype='float32')
+    helper.append_op(
+            type="cast",
+            inputs={'X': pre_act},
+            outputs={'Out': pre_act_casted},
+            attrs={'in_dtype': pre_act.dtype, 'out_dtype': convert_np_dtype_to_dtype_("float32")})
+
+    # fp32 fc output mul scale_factor's reciprocal
+    scale_factor_reciprocal = helper.create_variable_for_type_inference(dtype='float32')
+    fill_constant(shape=[1], dtype='float32', value=1 / input_scale_factor,  out=scale_factor_reciprocal)
+
+    fp32_fc_output = helper.create_variable_for_type_inference(dtype='float32')
+    helper.append_op(
+            type="elementwise_mul",
+            inputs={'X': pre_act_casted, 'Y': scale_factor_reciprocal},
+            outputs={'Out': fp32_fc_output},
+            attrs={'axis': -1})
+
+    #return helper.append_activation(pre_act)
+    return helper.append_activation(fp32_fc_output)
+
+def dequan(input,
+             mul_factor=10.0,
+             clip_min=-2.0,
+             clip_max=2.0):
+    """
+        dequan: input int32, output fp32
+    """
+
+    helper = LayerHelper("dequan", **locals())
+    check_type(input, 'input', (Variable), 'dequan')
+    #check_dtype(dtype, 'dtype', ['int32'], 'cast')
+
+    input_shape = input.shape
+    input_dtype = helper.input_dtype()
+    check_dtype(input_dtype, 'input', ['int32'], 'dequan')
+    
+    # scale factor 
+    #mul_scale_factor = helper.create_variable_for_type_inference(dtype='float32')
+    #mul_scale_factor_double = helper.create_variable_for_type_inference(dtype='float32')
+    #fill_constant(shape=[1], dtype='float32', value=mul_factor,  out=mul_scale_factor)
+    #fill_constant(shape=[1], dtype='float32', value=mul_factor*mul_factor,  out=mul_scale_factor_double)
+
+    mul_scale_factor_r = helper.create_variable_for_type_inference(dtype='float32')
+    fill_constant(shape=[1], dtype='float32', value=1/(mul_factor*mul_factor),  out=mul_scale_factor_r)
+   
+    # alpha
+    alpha = helper.create_variable_for_type_inference(dtype='float32')
+    alpha_value = (clip_max - clip_min) / 250.0
+    alpha_value = alpha_value * alpha_value / (mul_factor*mul_factor)
+    print("dequan, clip_min = %f, clip_max = %f, alpha_value=%f" % (clip_min, clip_max, alpha_value))
+    fill_constant(shape=[1], dtype='float32', value=alpha_value, out=alpha)
+
+    # cast input to fp32
+    input_fp32 = helper.create_variable_for_type_inference(dtype='float32')
+    helper.append_op(
+            type="cast",
+            inputs={'X': input},
+            outputs={'Out': input_fp32},
+            attrs={'in_dtype': input.dtype, 'out_dtype': convert_np_dtype_to_dtype_('float32')})
+    # input mul factor
+    input_fp32_mul_alpha_div_factor = helper.create_variable_for_type_inference(dtype='float32')
+    helper.append_op(
+            type="elementwise_mul",
+            inputs={'X': input_fp32, 'Y': alpha},
+            outputs={'Out': input_fp32_mul_alpha_div_factor},
+            attrs={'axis': -1})
+    
+    return input_fp32_mul_alpha_div_factor
+
+
+def quan(input,
+             dtype,
+             mul_factor=10.0,
+             clip_min=-2.0,
+             clip_max=2.0):
+    """
+        quan
+    """
+
+    helper = LayerHelper("quan", **locals())
+    check_type(input, 'input', (Variable), 'quan')
+    check_dtype(dtype, 'dtype', ['int8', 'int32'], 'cast')
+
+    input_shape = input.shape
+    input_dtype = helper.input_dtype()
+    check_dtype(input_dtype, 'input', ['float32'], 'quan')
+    
+    # scale factor 
+    mul_scale_factor = helper.create_variable_for_type_inference(dtype='float32')
+    mul_scale_factor_double = helper.create_variable_for_type_inference(dtype='float32')
+    fill_constant(shape=[1], dtype='float32', value=mul_factor,  out=mul_scale_factor)
+    fill_constant(shape=[1], dtype='float32', value=mul_factor*mul_factor,  out=mul_scale_factor_double)
+
+    mul_scale_factor_r = helper.create_variable_for_type_inference(dtype='float32')
+    fill_constant(shape=[1], dtype='float32', value=1/(mul_factor*mul_factor),  out=mul_scale_factor_r)
+   
+    # 0.5
+    const_num = helper.create_variable_for_type_inference(dtype='float32')
+    fill_constant(shape=[1], dtype='float32', value=0.5,  out=const_num)
+
+    # alpha
+    alpha = helper.create_variable_for_type_inference(dtype='float32')
+    alpha_value = (clip_max - clip_min) / 250.0
+    print("quan, clip_min = %f, clip_max = %f, alpha_value=%f" % (clip_min, clip_max, alpha_value))
+    fill_constant(shape=[1], dtype='float32', value=alpha_value, out=alpha)
+
+    # input X mul_factor
+    input_mul_factor = helper.create_variable_for_type_inference(dtype='float32')
+    input_mul_factor_diva = helper.create_variable_for_type_inference(dtype='float32')
+    input_mul_factor_diva_add = helper.create_variable_for_type_inference(dtype='float32')
+    helper.append_op(
+                type="elementwise_mul",
+                inputs={'X': input, 'Y': mul_scale_factor},
+                outputs={'Out': input_mul_factor},
+                attrs={'axis': -1})
+    
+    ### quan  ###
+    # clip to [clip_min, clip_max]
+    input_clip = helper.create_variable_for_type_inference(dtype='float32')
+    helper.append_op(
+        type="clip",
+        inputs={"X": input_mul_factor},
+        attrs={"min": clip_min,
+               "max": clip_max},
+        outputs={"Out": input_clip})
+
+    # divide alpha
+    helper.append_op(
+            type="elementwise_div",
+            inputs={'X': input_clip, 'Y': alpha},
+            outputs={'Out': input_mul_factor_diva},
+            attrs={'axis': -1})
+
+    # add 0.5
+    helper.append_op(
+            type="elementwise_add",
+            inputs={'X': input_mul_factor_diva, 'Y': const_num},
+            outputs={'Out': input_mul_factor_diva_add},
+            attrs={'axis': -1})
+
+    # cast input to int8 or int
+    input_casted = helper.create_variable_for_type_inference(dtype=dtype)
+    helper.append_op(
+            type="cast",
+            inputs={'X': input_mul_factor_diva_add},
+            outputs={'Out': input_casted},
+            attrs={'in_dtype': input_mul_factor_diva_add.dtype, 'out_dtype': dtype})
+
+    return input_casted
+
+def scaled_fc_int8(input,
+             param_size,
+             param_attr,
+             bias_size,
+             bias_attr,
+             input_scale_factor,
+             bias_scale_factor,
+             mul_factor=10.0,
+             clip_min=-2.0,
+             clip_max=2.0,
+             act=None):
+    """
+    **Scaled FC layer**
+    Notice: It currently supports GPU device.
+    Args:
+        input: Tensor with data type float32, float64, float16.
+        param_size: The size of w.
+        param_attr: Attribute initializer of w.
+        bias_size: The size of bias.
+        bias_attr: Attribute initializer of bias.
+        act: Activation to be applied to the output of this layer.
+        input_scale_factor: the scale of the input
+        bias_scale_factoe: the scale of the bias
+
+    Returns:
+        Variable: A Tensor with the same data type as input's.
+    """
+
+    helper = LayerHelper("quan_fc", **locals())
+    check_type(input, 'input', (Variable), 'quan_fc')
+    input_shape = input.shape
+
+    dtype = helper.input_dtype()
+    check_dtype(dtype, 'input', ['int8','float32'], 'quan_fc')
+   
+    # cast input to int8
+    input_casted = helper.create_variable_for_type_inference(dtype='int8')
+    input_casted = quan(input, convert_np_dtype_to_dtype_("int8"), mul_factor, clip_min, clip_max)
+    print("input_casted:") 
+    print(input_casted) 
+
+    # init fp32 weight & bias
+    w = helper.create_parameter(
+        attr=param_attr, shape=param_size, dtype='float32', is_bias=False)
+    b = helper.create_parameter(
+        attr=bias_attr, shape=bias_size, dtype='float32', is_bias=False)
+    int8_mul_res = helper.create_variable_for_type_inference(dtype='int32')
+    
+    # cast fp32 weight& bias to int8
+    w_casted = helper.create_variable_for_type_inference(dtype='int8')
+    w_casted = quan(w, convert_np_dtype_to_dtype_("int8"), mul_factor, clip_min, clip_max)
+    #b_casted = helper.create_variable_for_type_inference(dtype='int32')
+    #b_casted = quan(b, convert_np_dtype_to_dtype_("int8"), mul_factor, clip_min, clip_max)
+    
+    print("quan_fc: finish cast weight&bias to int8, and begin quan_fc.")
+    print("w_casted:")
+    print(w_casted)
+
+    # quan fc
+    helper.append_op(
+        type="quan_fc",
+        inputs={"Input": input_casted,
+                "W": w_casted,
+                "Bias": b},
+        attrs={'input_scale_factor': input_scale_factor, 'bias_scale_factor': bias_scale_factor},
+        outputs={"Out": int8_mul_res})
+
+    # int8_mul_res cast to fp32
+    mul_fp32 = helper.create_variable_for_type_inference(dtype='float32')
+    mul_fp32 = dequan(int8_mul_res, mul_factor, clip_min, clip_max)  # output: fp32, no bias
+
+    # add bias
+    pre_activation = helper.append_bias_op(mul_fp32)
+
+    return helper.append_activation(pre_activation)
+
+def scaled_cast(x, dtype, scale_factor):
+    
+    check_variable_and_dtype(
+        x, 'x',
+        ['float16', 'float32', 'float64'], 'scaled_cast')
+    check_dtype(dtype, 'dtype', [
+        'float16', 'float32', 'float64'], 'scaled_cast')
+
+    helper = LayerHelper('scaled_cast', **locals())
+    out = helper.create_variable_for_type_inference(dtype=dtype)
+    helper.append_op(
+        type='scaled_cast',
+        inputs={'X': [x]},
+        outputs={'Out': [out]},
+        attrs={'in_dtype': x.dtype,
+               'out_dtype': out.dtype,
+               'scale_factor': scale_factor})
+    return out
+
+def scaled_fc_and_scaled_cast(input,
+             param_size,
+             param_attr,
+             bias_size,
+             bias_attr,
+             input_scale_factor,
+             bias_scale_factor,
+             cast32to16_scale_factor,
+             cast16to32_scale_factor,
+             act=None):
+    """
+    **Scaled FC layer with scaled cast**
+    Notice: It currently supports GPU device.
+    Args:
+        input: Tensor with data type float32, float64, float16.
+        param_size: The size of w.
+        param_attr: Attribute initializer of w.
+        bias_size: The size of bias.
+        bias_attr: Attribute initializer of bias.
+        act: Activation to be applied to the output of this layer.
+        input_scale_factor: the scale of the input
+        bias_scale_factoe: the scale of the bias
+        cast32to16_scale_factor: cast fp32 to fp16, in bp, fp16 first cast to fp32 and then multiple the factor(factor<1.0)
+        cast16to32_scale_factor: cast fp16 to fp32, in bp, fp32 first cast to fp16 and then multiple the factor(factor>1.0)
+    Returns:
+        Variable: A Tensor with the same data type as input's.
+    """
+
+    helper = LayerHelper("scaled_fc_and_scaled_cast", **locals())
+    check_type(input, 'input', (Variable), 'scaled_fc_and_scaled_cast')
+    input_shape = input.shape
+
+    dtype = helper.input_dtype()
+    check_dtype(dtype, 'input', ['float32', 'float64', 'float16'], 'scaled_fc')
+
+    print("scale cast: cast32to16_scale_factor=%f" % cast32to16_scale_factor)
+    print("scale cast: cast16to32_scale_factor=%f" % cast16to32_scale_factor)
+
+    # cast input to fp16
+    input_casted = helper.create_variable_for_type_inference(dtype='float16')
+    helper.append_op(
+            type="scaled_cast",
+            inputs={'X': input},
+            outputs={'Out': input_casted},
+            attrs={'in_dtype': dtype, 
+                   'out_dtype': convert_np_dtype_to_dtype_("float16"),
+                   'scale_factor': cast32to16_scale_factor})  
+    #in bp: fp16 first cast to fp32, and then multiple the scale_factor
+
+    # init fp32 weight & bias
+    w = helper.create_parameter(
+        attr=param_attr, shape=param_size, dtype='float32', is_bias=False)
+    b = helper.create_parameter(
+        attr=bias_attr, shape=bias_size, dtype='float32', is_bias=False)
+    pre_act = helper.create_variable_for_type_inference('float16')
+
+    # cast fp32 weight& bias to fp16
+    w_casted = helper.create_variable_for_type_inference(dtype='float16')
+    b_casted = helper.create_variable_for_type_inference(dtype='float16')
+
+    #in bp: fp16 first cast to fp32, and then multiple the scale_factor(scale_factor<1.0)
+    helper.append_op(
+            type="scaled_cast",
+            inputs={'X': w},
+            outputs={'Out': w_casted},
+            attrs={'in_dtype': w.dtype, 
+                   'out_dtype': convert_np_dtype_to_dtype_("float16"),
+                   'scale_factor': cast32to16_scale_factor})
+    helper.append_op(
+            type="scaled_cast",
+            inputs={'X': b},
+            outputs={'Out': b_casted},
+            attrs={'in_dtype': b.dtype, 
+                   'out_dtype': convert_np_dtype_to_dtype_("float16"),
+                   'scale_factor': cast32to16_scale_factor})
+
+    # scaled fc
+    helper.append_op(
+        type="scaled_fc",
+        inputs={"Input": input_casted,
+                "W": w_casted,
+                "Bias": b_casted},
+        attrs={'input_scale_factor': input_scale_factor, 'bias_scale_factor': bias_scale_factor},
+        outputs={"Out": pre_act})
+
+    # cast fc output from fp16 to fp32
+    #in bp: fp32 first cast to fp16, and then multiple the scale_factor(scale_factor>1.0)
+    pre_act_casted = helper.create_variable_for_type_inference(dtype='float32')
+    helper.append_op(
+            type="scaled_cast",
+            inputs={'X': pre_act},
+            outputs={'Out': pre_act_casted},
+            attrs={'in_dtype': pre_act.dtype, 
+                   'out_dtype': convert_np_dtype_to_dtype_("float32"),
+                   'scale_factor': cast16to32_scale_factor})
+
+    # fp32 fc output mul scale_factor's reciprocal
+    scale_factor_reciprocal = helper.create_variable_for_type_inference(dtype='float32')
+    fill_constant(shape=[1], dtype='float32', value=1 / input_scale_factor,  out=scale_factor_reciprocal)
+
+    fp32_fc_output = helper.create_variable_for_type_inference(dtype='float32')
+    helper.append_op(
+            type="elementwise_mul",
+            inputs={'X': pre_act_casted, 'Y': scale_factor_reciprocal},
+            outputs={'Out': fp32_fc_output},
+            attrs={'axis': -1})
+
+    #return helper.append_activation(pre_act)
+    return helper.append_activation(fp32_fc_output)
+
+def single_scaled_fc_linear_act(input,
+             param_size,
+             param_attr,
+             bias_size,
+             bias_attr,
+             input_scale_factor,
+             bias_scale_factor,
+             cast32to16_scale_factor,
+             act=None):
+    """
+    **Scaled FC layer**
+    Notice: It currently supports GPU device.
+    Args:
+        input: Tensor with data type float32, float64, float16.
+        param_size: The size of w.
+        param_attr: Attribute initializer of w.
+        bias_size: The size of bias.
+        bias_attr: Attribute initializer of bias.
+        act: Activation to be applied to the output of this layer.
+        input_scale_factor: the scale of the input
+        bias_scale_factoe: the scale of the bias
+
+    Returns:
+        Variable: A Tensor with the same data type as input's.
+    """
+
+    helper = LayerHelper("single_scaled_fc", **locals())
+    check_type(input, 'input', (Variable), 'single_scaled_fc')
+    input_shape = input.shape
+
+    dtype = helper.input_dtype()
+    check_dtype(dtype, 'input', ['float32', 'float64', 'float16'], 'single_scaled_fc')
+
+    # init fp32 weight & bias
+    w = helper.create_parameter(
+        attr=param_attr, shape=param_size, dtype='float32', is_bias=False)
+    b = helper.create_parameter(
+        attr=bias_attr, shape=bias_size, dtype='float32', is_bias=False)
+    pre_act = helper.create_variable_for_type_inference('float16')
+
+    # cast fp32 weight& bias to fp16
+    w_casted = helper.create_variable_for_type_inference(dtype='float16')
+    b_casted = helper.create_variable_for_type_inference(dtype='float16')
+
+    #in bp: fp16 first cast to fp32, and then multiple the scale_factor(scale_factor<1.0)
+    helper.append_op(
+            type="scaled_cast",
+            inputs={'X': w},
+            outputs={'Out': w_casted},
+            attrs={'in_dtype': w.dtype, 
+                   'out_dtype': convert_np_dtype_to_dtype_("float16"),
+                   'scale_factor': cast32to16_scale_factor})
+    helper.append_op(
+            type="scaled_cast",
+            inputs={'X': b},
+            outputs={'Out': b_casted},
+            attrs={'in_dtype': b.dtype, 
+                   'out_dtype': convert_np_dtype_to_dtype_("float16"),
+                   'scale_factor': cast32to16_scale_factor})
+    
+    # scaled fc
+    helper.append_op(
+        type="scaled_fc",
+        inputs={"Input": input,
+                "W": w_casted,
+                "Bias": b_casted},
+        attrs={'input_scale_factor': input_scale_factor, 'bias_scale_factor': bias_scale_factor},
+        outputs={"Out": pre_act})
+
+    return helper.append_activation(pre_act)  # return scaled fc output(float16)
+
