@@ -60,7 +60,8 @@ __all__ = [
     'sparse_embedding', 'partial_sum', 'tdm_child', 'rank_attention',
     'tdm_sampler', 'batch_fc', '_pull_box_extended_sparse', 'bilateral_slice',
     'correlation', 'fused_bn_add_act', 'fused_seqpool_cvm',
-    'cross_norm_layer_hadamard', 'fused_seqpool_cvm_with_pcoc'
+    'cross_norm_layer_hadamard', 'fused_seqpool_cvm_with_pcoc',
+    'scaled_fc'
 ]
 
 
@@ -2049,3 +2050,61 @@ def fused_bn_add_act(x,
         attrs=attrs)
 
     return batch_norm_out
+
+def scaled_fc(input,
+             param_size,
+             param_attr,
+             bias_size,
+             bias_attr,
+             input_scale_factor,
+             bias_scale_factor,
+             grad_scale_factor = 256.0,
+             act=None):
+    """
+    **Scaled FC layer**
+    Notice: It currently supports GPU device.
+
+    Args:
+        input: Tensor with data type float32, float64.
+        param_size: The size of w.
+        param_attr: Attribute initializer of w.
+        bias_size: The size of bias.
+        bias_attr: Attribute initializer of bias.
+        act: Activation to be applied to the output of this layer.
+        input_scale_factor: the scale of the input
+        bias_scale_factoe: the scale of the bias
+        grad_scale_factoe: the scale during bp
+
+    Returns:
+        Variable: A Tensor with the same data type as input's.
+    """
+
+    helper = LayerHelper("scaled_fc", **locals())
+    check_type(input, 'input', (Variable), 'scaled_fc')
+    input_shape = input.shape
+
+    dtype = helper.input_dtype()
+    check_dtype(dtype, 'input', ['float32', 'float64'], 'scaled_fc')
+
+    if input_scale_factor != bias_scale_factor:
+        raise ValueError(
+            "input_scale_factor != bias_scale_factor. ")
+
+    # init fp32 weight & bias
+    w = helper.create_parameter(
+        attr=param_attr, shape=param_size, dtype='float32', is_bias=False)
+    b = helper.create_parameter(
+        attr=bias_attr, shape=bias_size, dtype='float32', is_bias=False)
+    pre_act = helper.create_variable_for_type_inference('float32')
+
+    # scaled fc
+    helper.append_op(
+        type="scaled_fc",
+        inputs={"Input": input,
+                "W": w,
+                "Bias": b},
+        attrs={'input_scale_factor': input_scale_factor, 'bias_scale_factor': bias_scale_factor, 'grad_scale_factor': grad_scale_factor},
+        outputs={"Out": pre_act})
+
+    return helper.append_activation(pre_act)
+
